@@ -182,9 +182,10 @@ function applyPerformanceMode(mode) {
 
   els.perfToggles.forEach(toggle => {
     const light = performanceMode === 'light';
-    toggle.textContent = light ? 'Light' : 'Hard';
+    toggle.textContent = light ? 'Fluide' : 'Effets';
     toggle.setAttribute('aria-pressed', String(light));
-    toggle.title = light ? 'Mode performance actif' : 'Mode visuel complet';
+    toggle.title = light ? 'Effets allégés pour fluidité' : 'Effets visuels activés';
+    toggle.setAttribute('aria-label', light ? 'Passer aux effets visuels' : 'Passer au rendu fluide');
   });
 }
 

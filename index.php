@@ -75,7 +75,7 @@ require __DIR__ . '/partials/head.php';
 
       <!-- Bouton actualiser + indicateur de statut -->
       <div class="topbar-right">
-        <button class="perf-toggle" type="button" data-perf-toggle aria-pressed="false">Hard</button>
+        <button class="perf-toggle" type="button" data-perf-toggle aria-pressed="false">Effets</button>
         <button id="refreshBtn" class="refresh-btn" type="button" aria-label="Actualiser les données">
           <span class="refresh-icon" aria-hidden="true">↻</span>
         </button>
@@ -334,7 +334,7 @@ require __DIR__ . '/partials/head.php';
     <a href="#matchs" data-view="matches">Matchs</a>
     <a href="#phase-finale" data-view="final-stage">Finale</a>
     <button class="mode-toggle" type="button" data-view-toggle>Mode complet</button>
-    <button class="perf-toggle" type="button" data-perf-toggle aria-pressed="false">Hard</button>
+    <button class="perf-toggle" type="button" data-perf-toggle aria-pressed="false">Effets</button>
   </nav>
 
   <a id="backToTop" class="back-to-top" href="#top" data-scroll-top aria-label="Retour vers le haut">↑</a>
