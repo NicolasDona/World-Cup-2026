@@ -79,6 +79,10 @@ if (!defined('WORLD_CUP_APP')) {
       outline: none;
     }
 
+    body.modal-open .psyom-return-home {
+      display: none;
+    }
+
     @media (max-width: 560px) {
       .psyom-return-home {
         min-height: 38px;
