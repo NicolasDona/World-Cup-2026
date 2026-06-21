@@ -64,6 +64,7 @@ require __DIR__ . '/partials/head.php';
         <a href="#groupes" data-view="groups">Groupes</a>
         <a href="#equipes" data-view="teams">Équipes</a>
         <a href="#matchs" data-view="matches">Matchs</a>
+        <a href="#phase-finale" data-view="final-stage">Phase finale</a>
         <button class="mode-toggle" type="button" data-view-toggle>Mode complet</button>
       </div>
 
@@ -97,11 +98,11 @@ require __DIR__ . '/partials/head.php';
         <p class="eyebrow">Canada · Mexique · États-Unis</p>
         <h1>Coupe<br>du Monde<br><span class="h1-year">2026</span></h1>
         <p class="beta-status">Version finale évolutive</p>
-        <a class="final-stage-dev-link" href="/WC2026_FinalStage_Lab/" target="_blank" rel="noopener noreferrer">Phase finale en développement · voir l'avancée</a>
         <p class="lead">Un espace fan pour suivre la Coupe du Monde 2026 au bon rythme : les matchs qui arrivent, les groupes, les équipes à suivre et les histoires qui font vivre le tournoi.</p>
         <div class="hero-actions" aria-label="Actions principales">
           <a href="#matchs" data-view="matches">Voir le calendrier</a>
           <a href="#groupes" data-view="groups">Classements</a>
+          <a href="#phase-finale" data-view="final-stage">Phase finale</a>
         </div>
         <div class="hero-note">
           <span>Focus fan</span>
@@ -306,6 +307,17 @@ require __DIR__ . '/partials/head.php';
       <div id="matches" class="match-list"></div>
     </section>
 
+    <section id="phase-finale" class="panel final-stage-panel" aria-label="Tableau de la phase finale">
+      <div class="section-title">
+        <div>
+          <p class="eyebrow">Tableau</p>
+          <h2>Phase finale</h2>
+        </div>
+        <p class="hint">Seizièmes, huitièmes, quarts, demi-finales et finale.</p>
+      </div>
+      <div id="finalStageBracket" class="final-stage-bracket" aria-live="polite"></div>
+    </section>
+
   </main>
 
   <!-- ── Pied de page ───────────────────────────────────────────────────── -->
@@ -318,6 +330,7 @@ require __DIR__ . '/partials/head.php';
     <a href="#groupes" data-view="groups">Groupes</a>
     <a href="#equipes" data-view="teams">Équipes</a>
     <a href="#matchs" data-view="matches">Matchs</a>
+    <a href="#phase-finale" data-view="final-stage">Finale</a>
     <button class="mode-toggle" type="button" data-view-toggle>Mode complet</button>
   </nav>
 
