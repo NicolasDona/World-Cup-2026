@@ -111,6 +111,7 @@ const els = {
   nextCount:      document.querySelector('#nextCount'),
   navLinks:       document.querySelectorAll('[data-view]'),
   viewToggles:    document.querySelectorAll('[data-view-toggle]'),
+  perfToggles:    document.querySelectorAll('[data-perf-toggle]'),
   modeNotice:     document.querySelector('#modeNotice'),
   modeNoticeLabel: document.querySelector('#modeNoticeLabel'),
   modeNoticeText: document.querySelector('#modeNoticeText'),
@@ -172,6 +173,26 @@ let nextMatchUtc = null;
 let watchedNextMatchUtc = null;
 let hasLoadedData = false;
 let liveRefreshInFlight = false;
+const PERF_STORAGE_KEY = 'worldcup2026:performance-mode';
+let performanceMode = 'hard';
+
+function applyPerformanceMode(mode) {
+  performanceMode = mode === 'light' ? 'light' : 'hard';
+  document.documentElement.classList.toggle('perf-light', performanceMode === 'light');
+
+  els.perfToggles.forEach(toggle => {
+    const light = performanceMode === 'light';
+    toggle.textContent = light ? 'Light' : 'Hard';
+    toggle.setAttribute('aria-pressed', String(light));
+    toggle.title = light ? 'Mode performance actif' : 'Mode visuel complet';
+  });
+}
+
+try {
+  applyPerformanceMode(localStorage.getItem(PERF_STORAGE_KEY) || 'hard');
+} catch {
+  applyPerformanceMode('hard');
+}
 
 /**
  * Nombre de matchs actuellement affichés dans la liste.
@@ -3158,6 +3179,16 @@ els.viewToggles.forEach(toggle => {
   toggle.addEventListener('click', () => {
     const fullMode = activeView === 'home';
     setView(fullMode ? 'all' : 'home', fullMode ? '#prochain-match' : '#top');
+  });
+});
+
+els.perfToggles.forEach(toggle => {
+  toggle.addEventListener('click', () => {
+    const nextMode = performanceMode === 'light' ? 'hard' : 'light';
+    applyPerformanceMode(nextMode);
+    try {
+      localStorage.setItem(PERF_STORAGE_KEY, nextMode);
+    } catch {}
   });
 });
 

@@ -273,6 +273,30 @@ body::before {
   font-size: .68rem;
 }
 
+.perf-toggle {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  color: var(--muted);
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 900;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.perf-toggle:hover,
+.perf-toggle:focus-visible,
+.perf-toggle[aria-pressed="true"] {
+  border-color: rgba(14,232,184,.42);
+  background: rgba(14,232,184,.11);
+  color: var(--teal);
+  outline: none;
+}
+
 .navlinks a:hover { color: #fff; }
 .navlinks a.is-active { color: var(--teal); }
 
@@ -3200,6 +3224,14 @@ td:nth-child(3) { font-weight: 700; } /* Points en gras */
   font-size: .64rem;
 }
 
+.quick-nav .perf-toggle {
+  flex: 0 0 auto;
+  width: 64px;
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: .62rem;
+}
+
 .back-to-top {
   position: fixed;
   right: 22px;
@@ -4565,4 +4597,59 @@ button.final-stage-team-name:focus-visible {
     line-height: 1.42;
     overflow: auto;
   }
+}
+
+html.perf-light *,
+html.perf-light *::before,
+html.perf-light *::after {
+  transition-duration: .01ms !important;
+  animation-duration: .01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+
+html.perf-light .worldcup-ticker-content {
+  animation: none !important;
+  transform: none !important;
+}
+
+html.perf-light .topbar,
+html.perf-light .tournament-strip,
+html.perf-light .site-search,
+html.perf-light .hero-card,
+html.perf-light .spotlight,
+html.perf-light .recruit-brief,
+html.perf-light .mode-notice,
+html.perf-light .quick-nav,
+html.perf-light .modal-content,
+html.perf-light .worldcup-ticker,
+html.perf-light .final-stage-scroll,
+html.perf-light .final-stage-tooltip {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.perf-light .hero-card,
+html.perf-light .spotlight,
+html.perf-light .recruit-brief,
+html.perf-light .panel,
+html.perf-light .match-card,
+html.perf-light .team-card,
+html.perf-light .daily-match-card,
+html.perf-light .final-stage-match,
+html.perf-light .quick-nav,
+html.perf-light .modal-content {
+  box-shadow: none !important;
+}
+
+html.perf-light .hero::before,
+html.perf-light .emblem,
+html.perf-light .team-crest,
+html.perf-light .flag {
+  filter: none !important;
+}
+
+html.perf-light .live-dot,
+html.perf-light .refresh-btn.spinning .refresh-icon {
+  animation: none !important;
 }
