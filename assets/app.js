@@ -1382,7 +1382,11 @@ function matchDetailButtonHtml(match, className = '') {
 }
 
 function matchTimelineEvents(match = {}) {
-  const scorers = (Array.isArray(match.scorers) ? match.scorers : []).map(goal => ({
+  const rawScorers = Array.isArray(match.scorers) ? match.scorers : [];
+  const score = readMatchScore(match);
+  const scoreGoals = score ? score.home + score.away : 0;
+
+  const scorers = rawScorers.map(goal => ({
     kind: isOwnGoalEvent(goal) ? 'own-goal' : 'goal',
     label: goalMainLabel(goal),
     player: goal.player,
@@ -1393,6 +1397,25 @@ function matchTimelineEvents(match = {}) {
     team: goal.team,
     source: goal.source || 'TheSportsDB',
   }));
+
+  const fallbackGoals = !rawScorers.length && scoreGoals
+    ? [
+        ['home', match.homeTeam, score.home],
+        ['away', match.awayTeam, score.away],
+      ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
+        const teamName = team?.name || team?.shortName || 'Équipe';
+        return {
+          kind: 'goal',
+          label: `${goals} but${goals > 1 ? 's' : ''}`,
+          player: teamName,
+          detail: `Buteur${goals > 1 ? 's' : ''} à confirmer par la source`,
+          minute: null,
+          teamSide: side,
+          team: teamName,
+          source: 'Score officiel',
+        };
+      })
+    : [];
 
   const cards = (Array.isArray(match.cards) ? match.cards : []).map(card => ({
     kind: card.type === 'red' ? 'red-card' : 'yellow-card',
@@ -1405,7 +1428,7 @@ function matchTimelineEvents(match = {}) {
     source: card.source || 'TheSportsDB',
   }));
 
-  return [...scorers, ...cards].sort((a, b) => {
+  return [...scorers, ...fallbackGoals, ...cards].sort((a, b) => {
     const ma = Number.isFinite(a.minute) ? a.minute : 999;
     const mb = Number.isFinite(b.minute) ? b.minute : 999;
     return ma - mb;
