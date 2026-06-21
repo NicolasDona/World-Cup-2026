@@ -1214,7 +1214,24 @@ function scoreForTeamInMatch(match, team) {
 
 function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
   const scorers = Array.isArray(match.scorers) ? match.scorers : [];
-  if (!scorers.length) return '';
+  if (!scorers.length) {
+    const score = readMatchScore(match);
+    if (!score || score.home + score.away <= 0) return '';
+
+    const fallbackItems = [
+      ['home', match.homeTeam, score.home],
+      ['away', match.awayTeam, score.away],
+    ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
+      const teamName = team?.name || team?.shortName || 'Équipe';
+      return `<span class="score-event is-score-fallback">
+        <span class="match-info-icon ball-icon" aria-label="But"></span>
+        ${eventTeamVisual(match, { teamSide: side, team: teamName })}
+        ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - ${teamName}`)}
+      </span>`;
+    }).join('');
+
+    return fallbackItems ? `<small class="${className}">${fallbackItems}</small>` : '';
+  }
 
   const visibleScorers = Number.isFinite(limit) ? scorers.slice(0, limit) : scorers;
   const hiddenCount = scorers.length - visibleScorers.length;
