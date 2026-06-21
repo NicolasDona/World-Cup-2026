@@ -131,6 +131,7 @@ require __DIR__ . '/partials/head.php';
           <span>World Cup 2026</span>
           <strong>Nos journalistes sur le terrain</strong>
           <div class="recruit-links">
+            <a href="../Tibor_Kovak/">Tibor K</a>
             <a href="../Pedro_gros%20chibro/">Pedro Gros Chibro</a>
             <a href="../Roro_le_Manchot/">Roro le Manchot</a>
             <a href="../Motard_Rose/">Motard Rose</a>
