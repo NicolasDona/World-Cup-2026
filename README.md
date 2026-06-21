@@ -2,6 +2,12 @@
 
 Site personnel pour suivre la Coupe du Monde 2026 : matchs, résultats, groupes, fiches équipes, buteurs, performances joueurs et actualités.
 
+## Sources API
+
+- [football-data.org](https://www.football-data.org/) : calendrier, matchs, résultats, groupes et classements.
+- [TheSportsDB](https://www.thesportsdb.com/) : événements détaillés, buteurs, passes et données enrichies. Utilisation avec accès premium.
+- [NewsAPI](https://newsapi.org/) : actualités liées au tournoi.
+
 ## Fonctionnalités
 
 - Tableau de bord du tournoi.
