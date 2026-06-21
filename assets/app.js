@@ -2751,7 +2751,10 @@ function fitFinalStageBracket() {
 
   const width = 1240;
   const height = 704;
-  const scale = Math.min(1, Math.max(scroll.clientWidth, 320) / width);
+  const styles = window.getComputedStyle(scroll);
+  const horizontalPadding = parseFloat(styles.paddingLeft) + parseFloat(styles.paddingRight);
+  const availableWidth = Math.max(scroll.clientWidth - horizontalPadding - 2, 280);
+  const scale = Math.min(1, availableWidth / width);
   field.style.transform = `scale(${scale})`;
   field.style.marginLeft = scale < 1 ? '0' : 'auto';
   field.style.marginRight = scale < 1 ? '0' : 'auto';
