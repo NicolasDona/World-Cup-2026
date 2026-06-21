@@ -1098,11 +1098,13 @@ function numericScore(value) {
 
 function readMatchScore(match = {}) {
   const home = numericScore(
+    match.liveScore?.home ??
     match.score?.fullTime?.home ??
     match.score?.regularTime?.home ??
     match.score?.halfTime?.home
   );
   const away = numericScore(
+    match.liveScore?.away ??
     match.score?.fullTime?.away ??
     match.score?.regularTime?.away ??
     match.score?.halfTime?.away
@@ -2038,9 +2040,8 @@ function getLiveWatchedMatch() {
 }
 
 function liveScoreText(match) {
-  const home = match.score?.fullTime?.home ?? match.score?.regularTime?.home ?? match.score?.halfTime?.home;
-  const away = match.score?.fullTime?.away ?? match.score?.regularTime?.away ?? match.score?.halfTime?.away;
-  return Number.isFinite(home) && Number.isFinite(away) ? `${home} - ${away}` : scoreText(match);
+  const goals = readMatchScore(match);
+  return goals ? `${goals.home} - ${goals.away}` : scoreText(match);
 }
 
 function liveElapsedMinute(match) {
@@ -2168,7 +2169,6 @@ function renderLiveMatch() {
         ${isLive || isAwaitingFinal ? '' : `<small>${fmtDate(match.utcDate)}</small>`}
         <small id="liveMatchCountdown" class="${isLive || isAwaitingFinal ? 'live-clock-badge' : 'live-match-countdown'}">${isLive ? liveClockText(match) : (isAwaitingFinal ? 'Fin du match à confirmer' : `Départ dans ${countdownText(match.utcDate)}`)}</small>
       </div>
-      ${cardsHtml(match, 'match-cards live-cards')}
     </article>`;
 }
 
@@ -3030,6 +3030,10 @@ function mergeStableMatchEvents(previousMatches = [], incomingMatches = []) {
     ['scorers', 'cards', 'highlights'].forEach(field => {
       const nextEvents = Array.isArray(match[field]) ? match[field] : [];
       const previousEvents = Array.isArray(previous[field]) ? previous[field] : [];
+      const currentScore = readMatchScore(match);
+      if (field === 'scorers' && (!currentScore || currentScore.home + currentScore.away <= 0)) {
+        return;
+      }
       if (!nextEvents.length && previousEvents.length && (isLiveMatch(match) || isFinishedMatch(match))) {
         merged[field] = previousEvents;
       }
