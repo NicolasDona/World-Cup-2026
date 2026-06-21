@@ -1214,8 +1214,37 @@ function scoreForTeamInMatch(match, team) {
   return null;
 }
 
+function missingGoalSummaries(match, scorers = []) {
+  const score = readMatchScore(match);
+  if (!score || score.home + score.away <= scorers.length) return [];
+
+  const sideCounts = { home: 0, away: 0 };
+  scorers.forEach(goal => {
+    if (goal.teamSide === 'home' || goal.teamSide === 'away') {
+      sideCounts[goal.teamSide] += 1;
+    }
+  });
+
+  const missing = {
+    home: Math.max(0, score.home - sideCounts.home),
+    away: Math.max(0, score.away - sideCounts.away),
+  };
+  const missingTotal = Math.max(0, score.home + score.away - scorers.length);
+
+  while (missing.home + missing.away > missingTotal && (missing.home > 0 || missing.away > 0)) {
+    if (missing.home >= missing.away && missing.home > 0) missing.home -= 1;
+    else if (missing.away > 0) missing.away -= 1;
+  }
+
+  return [
+    ['home', match.homeTeam, missing.home],
+    ['away', match.awayTeam, missing.away],
+  ].filter(([, , goals]) => goals > 0);
+}
+
 function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
   const scorers = Array.isArray(match.scorers) ? match.scorers : [];
+  const missingGoals = missingGoalSummaries(match, scorers);
   if (!scorers.length) {
     const score = readMatchScore(match);
     if (!score || score.home + score.away <= 0) return '';
@@ -1228,7 +1257,7 @@ function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
       return `<span class="score-event is-score-fallback">
         <span class="match-info-icon ball-icon" aria-label="But"></span>
         ${eventTeamVisual(match, { teamSide: side, team: teamName })}
-        ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - ${teamName}`)}
+        ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}
       </span>`;
     }).join('');
 
@@ -1249,8 +1278,17 @@ function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
     </span>`;
   }).join('');
 
+  const missingItems = missingGoals.map(([side, team, goals]) => {
+    const teamName = team?.name || team?.shortName || 'Equipe';
+    return `<span class="score-event is-score-fallback">
+      <span class="match-info-icon ball-icon" aria-label="But"></span>
+      ${eventTeamVisual(match, { teamSide: side, team: teamName })}
+      ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}
+    </span>`;
+  }).join('');
+
   const more = hiddenCount > 0 ? `<span class="score-event is-more">+${hiddenCount} but${hiddenCount > 1 ? 's' : ''}</span>` : '';
-  return `<small class="${className}">${items}${more}</small>`;
+  return `<small class="${className}">${items}${missingItems}${more}</small>`;
 }
 
 function liveEventsSummaryHtml(match) {
@@ -1258,22 +1296,20 @@ function liveEventsSummaryHtml(match) {
   const cards = Array.isArray(match.cards) ? match.cards : [];
   const score = readMatchScore(match);
   const scoreGoals = score ? score.home + score.away : 0;
+  const missingGoals = missingGoalSummaries(match, scorers);
 
   if (!scorers.length && !cards.length && !scoreGoals) {
     return '';
   }
 
-  const fallbackGoalItems = !scorers.length && scoreGoals
-    ? [
-        ['home', match.homeTeam, score.home],
-        ['away', match.awayTeam, score.away],
-      ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
+  const fallbackGoalItems = missingGoals.length
+    ? missingGoals.map(([side, team, goals]) => {
         const teamName = team?.name || team?.shortName || 'Équipe';
         return `<li>
           <span class="live-event-minute">But</span>
           <span class="live-event-icon match-info-icon ball-icon" aria-hidden="true"></span>
           <span class="live-event-body">
-            <strong>${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - ${teamName}`)}</strong>
+            <strong>${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}</strong>
             <small>${eventTeamVisual(match, { teamSide: side, team: teamName })}${escapeHtml('Buteur' + (goals > 1 ? 's' : '') + ' à confirmer par la source')}</small>
           </span>
         </li>`;
@@ -1402,8 +1438,7 @@ function matchDetailButtonHtml(match, className = '') {
 
 function matchTimelineEvents(match = {}) {
   const rawScorers = Array.isArray(match.scorers) ? match.scorers : [];
-  const score = readMatchScore(match);
-  const scoreGoals = score ? score.home + score.away : 0;
+  const missingGoals = missingGoalSummaries(match, rawScorers);
 
   const scorers = rawScorers.map(goal => ({
     kind: isOwnGoalEvent(goal) ? 'own-goal' : 'goal',
@@ -1417,11 +1452,8 @@ function matchTimelineEvents(match = {}) {
     source: goal.source || 'TheSportsDB',
   }));
 
-  const fallbackGoals = !rawScorers.length && scoreGoals
-    ? [
-        ['home', match.homeTeam, score.home],
-        ['away', match.awayTeam, score.away],
-      ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
+  const fallbackGoals = missingGoals.length
+    ? missingGoals.map(([side, team, goals]) => {
         const teamName = team?.name || team?.shortName || 'Équipe';
         return {
           kind: 'goal',
