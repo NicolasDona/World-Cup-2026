@@ -22,6 +22,7 @@ require __DIR__ . '/config.php';
 // Pendant la Coupe du Monde, les actualités doivent bouger vite.
 // Le front interroge déjà ce proxy toutes les 60 secondes.
 const NEWS_CACHE_TTL_SECONDS = 120;
+const ESPN_SCOREBOARD_URL = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
 
 // ── En-têtes HTTP de la réponse ──────────────────────────────────────────────
 header('Content-Type: application/json; charset=utf-8');
@@ -473,6 +474,8 @@ function teamSearchNames(array $team): array
         'Bosnia-Herzegovina' => 'Bosnia and Herzegovina',
         'Bosnia-H.' => 'Bosnia and Herzegovina',
         'Congo DR' => 'DR Congo',
+        'Côte d’Ivoire' => 'Ivory Coast',
+        'Cote dIvoire' => 'Ivory Coast',
     ];
 
     $names = [];
@@ -484,6 +487,184 @@ function teamSearchNames(array $team): array
     }
 
     return array_values(array_unique($names));
+}
+
+function normalizedTeamName(string $name): string
+{
+    $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name);
+    $clean = strtolower($ascii !== false ? $ascii : $name);
+    return preg_replace('/[^a-z0-9]+/', '', $clean) ?? '';
+}
+
+function teamNameKeys(array $team): array
+{
+    $keys = [];
+    foreach (teamSearchNames($team) as $name) {
+        $key = normalizedTeamName((string) $name);
+        if ($key !== '') {
+            $keys[] = $key;
+        }
+    }
+    return array_values(array_unique($keys));
+}
+
+function espnTeamNameKeys(array $competitor): array
+{
+    $team = is_array($competitor['team'] ?? null) ? $competitor['team'] : [];
+    $names = [
+        $team['displayName'] ?? '',
+        $team['name'] ?? '',
+        $team['shortDisplayName'] ?? '',
+        $team['location'] ?? '',
+        $team['abbreviation'] ?? '',
+    ];
+
+    $keys = [];
+    foreach ($names as $name) {
+        $key = normalizedTeamName((string) $name);
+        if ($key !== '') {
+            $keys[] = $key;
+        }
+    }
+    return array_values(array_unique($keys));
+}
+
+function hasSharedTeamName(array $leftKeys, array $rightKeys): bool
+{
+    return count(array_intersect($leftKeys, $rightKeys)) > 0;
+}
+
+function espnScoreboardForDate(string $date): array
+{
+    static $scoreboards = [];
+    $safeDate = preg_replace('/[^0-9]/', '', $date) ?? '';
+    if (strlen($safeDate) !== 8) {
+        return [];
+    }
+
+    if (!array_key_exists($safeDate, $scoreboards)) {
+        $scoreboards[$safeDate] = externalJsonGet(ESPN_SCOREBOARD_URL . '?dates=' . rawurlencode($safeDate), 6);
+    }
+
+    return is_array($scoreboards[$safeDate]) ? $scoreboards[$safeDate] : [];
+}
+
+function findEspnCompetitionForMatch(array $match): array
+{
+    $date = isset($match['utcDate']) ? substr((string) $match['utcDate'], 0, 10) : '';
+    if ($date === '') {
+        return [];
+    }
+
+    $scoreboard = espnScoreboardForDate($date);
+    $events = is_array($scoreboard['events'] ?? null) ? $scoreboard['events'] : [];
+    $homeKeys = teamNameKeys((array) ($match['homeTeam'] ?? []));
+    $awayKeys = teamNameKeys((array) ($match['awayTeam'] ?? []));
+
+    foreach ($events as $event) {
+        $competitions = is_array($event['competitions'] ?? null) ? $event['competitions'] : [];
+        foreach ($competitions as $competition) {
+            $competitors = is_array($competition['competitors'] ?? null) ? $competition['competitors'] : [];
+            $espnHome = [];
+            $espnAway = [];
+            foreach ($competitors as $competitor) {
+                $side = (string) ($competitor['homeAway'] ?? '');
+                if ($side === 'home') {
+                    $espnHome = (array) $competitor;
+                } elseif ($side === 'away') {
+                    $espnAway = (array) $competitor;
+                }
+            }
+
+            if ($espnHome === [] || $espnAway === []) {
+                continue;
+            }
+
+            if (
+                hasSharedTeamName($homeKeys, espnTeamNameKeys($espnHome))
+                && hasSharedTeamName($awayKeys, espnTeamNameKeys($espnAway))
+            ) {
+                return (array) $competition;
+            }
+        }
+    }
+
+    return [];
+}
+
+function espnMinute(array $detail): ?int
+{
+    $display = (string) ($detail['clock']['displayValue'] ?? '');
+    if (preg_match('/\d+/', $display, $matches)) {
+        return (int) $matches[0];
+    }
+
+    $seconds = $detail['clock']['value'] ?? null;
+    return is_numeric($seconds) ? max(0, (int) ceil(((float) $seconds) / 60)) : null;
+}
+
+function espnDetailsForMatch(array $match): array
+{
+    $competition = findEspnCompetitionForMatch($match);
+    if ($competition === []) {
+        return ['scorers' => [], 'cards' => [], 'highlights' => []];
+    }
+
+    $teamSides = [];
+    $competitors = is_array($competition['competitors'] ?? null) ? $competition['competitors'] : [];
+    foreach ($competitors as $competitor) {
+        $teamId = (string) ($competitor['team']['id'] ?? '');
+        $side = (string) ($competitor['homeAway'] ?? '');
+        if ($teamId !== '' && in_array($side, ['home', 'away'], true)) {
+            $teamSides[$teamId] = $side;
+        }
+    }
+
+    $goals = [];
+    $cards = [];
+    $details = is_array($competition['details'] ?? null) ? $competition['details'] : [];
+    foreach ($details as $detail) {
+        $typeText = trim((string) ($detail['type']['text'] ?? $detail['type']['displayName'] ?? ''));
+        $typeKey = strtolower($typeText);
+        $athletes = is_array($detail['athletesInvolved'] ?? null) ? $detail['athletesInvolved'] : [];
+        $athlete = is_array($athletes[0] ?? null) ? $athletes[0] : [];
+        $player = trim((string) ($athlete['shortName'] ?? $athlete['displayName'] ?? $athlete['fullName'] ?? ''));
+        $detailTeamId = (string) ($detail['team']['id'] ?? '');
+        $athleteTeamId = (string) ($athlete['team']['id'] ?? '');
+        $side = $teamSides[$detailTeamId] ?? ($teamSides[$athleteTeamId] ?? '');
+        $minute = espnMinute((array) $detail);
+
+        if (($detail['scoringPlay'] ?? false) || str_contains($typeKey, 'goal')) {
+            $goals[] = [
+                'teamSide' => $side,
+                'team'     => $detail['team']['displayName'] ?? '',
+                'player'   => $player !== '' ? $player : trim((string) ($detail['text'] ?? '')),
+                'minute'   => $minute,
+                'assist'   => '',
+                'detail'   => ($detail['ownGoal'] ?? false) ? 'Own Goal' : ($typeText !== '' ? $typeText : 'Goal'),
+                'source'   => 'ESPN',
+            ];
+        }
+
+        if (($detail['yellowCard'] ?? false) || ($detail['redCard'] ?? false) || str_contains($typeKey, 'card')) {
+            $isRed = ($detail['redCard'] ?? false) || str_contains($typeKey, 'red');
+            $cards[] = [
+                'type'     => $isRed ? 'red' : 'yellow',
+                'teamSide' => $side,
+                'team'     => $detail['team']['displayName'] ?? '',
+                'player'   => $player !== '' ? $player : trim((string) ($detail['text'] ?? '')),
+                'minute'   => $minute,
+                'detail'   => $typeText !== '' ? $typeText : ($isRed ? 'Red Card' : 'Yellow Card'),
+                'source'   => 'ESPN',
+            ];
+        }
+    }
+
+    return [
+        'scorers'    => $goals,
+        'cards'      => $cards,
+        'highlights' => [],
+    ];
 }
 
 function matchScoreTotal(array $match): int
@@ -706,19 +887,30 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     $cacheFile = CACHE_DIR . '/match_details_' . $cacheKey . '_' . preg_replace('/[^a-zA-Z0-9_\-]/', '_', $matchId . $scoreKey) . '.json';
     $cacheTtl = $isFinished ? 21600 : 0;
     $snapshot = cachedEventDetailsForMatch($match);
+    $espnDetails = null;
+    $getEspnDetails = static function () use (&$espnDetails, $match): array {
+        if ($espnDetails === null) {
+            $espnDetails = espnDetailsForMatch($match);
+        }
+        return is_array($espnDetails) ? $espnDetails : ['scorers' => [], 'cards' => [], 'highlights' => []];
+    };
 
     if (!$isLiveData && is_file($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
         $cached = json_decode((string) file_get_contents($cacheFile), true);
         if (is_array($cached)) {
+            $espn = [];
             if (empty($cached['scorers']) && matchScoreTotal($match) > 0) {
-                $cached['scorers'] = $snapshot['scorers'] ?: legacyCachedScorersForMatch($match);
+                $espn = $getEspnDetails();
+                $cached['scorers'] = $espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match));
             }
             if (empty($cached['cards'])) {
-                $cached['cards'] = $snapshot['cards'];
+                $espn = $espn ?: $getEspnDetails();
+                $cached['cards'] = $espn['cards'] ?: $snapshot['cards'];
             }
             if (empty($cached['highlights'])) {
                 $cached['highlights'] = $snapshot['highlights'];
             }
+            rememberEventDetailsForMatch($match, $cached);
             return $cached;
         }
         return ['scorers' => [], 'cards' => [], 'highlights' => []];
@@ -726,13 +918,15 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
 
     $event = findSportsDbEvent($match);
     if (!$event || empty($event['idEvent'])) {
+        $espn = $getEspnDetails();
         $empty = [
-            'scorers' => $snapshot['scorers'] ?: legacyCachedScorersForMatch($match),
-            'cards' => $snapshot['cards'],
+            'scorers' => $espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)),
+            'cards' => $espn['cards'] ?: $snapshot['cards'],
             'highlights' => $snapshot['highlights'],
             'liveScore' => null,
             'liveStatus' => '',
         ];
+        rememberEventDetailsForMatch($match, $empty);
         if (!$isLiveData) {
             @file_put_contents($cacheFile, json_encode($empty));
         }
@@ -791,10 +985,14 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         }
     }
 
-    $completeGoals = count($goals) === $expectedGoals ? $goals : ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match));
+    $espn = [];
+    if ((count($goals) !== $expectedGoals && $expectedGoals > 0) || empty($cards)) {
+        $espn = $getEspnDetails();
+    }
+    $completeGoals = count($goals) === $expectedGoals ? $goals : ($espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)));
     $details = [
         'scorers'    => $completeGoals,
-        'cards'      => $cards ?: $snapshot['cards'],
+        'cards'      => $cards ?: ($espn['cards'] ?? []) ?: $snapshot['cards'],
         'highlights' => ($match['status'] ?? '') === 'FINISHED' ? sportsDbHighlightsForEvent($event, $match) : [],
         'liveScore'  => $liveScore,
         'liveStatus' => trim((string) ($event['strStatus'] ?? '')),
