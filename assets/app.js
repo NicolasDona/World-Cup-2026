@@ -182,10 +182,10 @@ function applyPerformanceMode(mode) {
 
   els.perfToggles.forEach(toggle => {
     const light = performanceMode === 'light';
-    toggle.textContent = light ? 'Fluide' : 'Effets';
+    toggle.textContent = light ? 'Rapide' : 'Normal';
     toggle.setAttribute('aria-pressed', String(light));
-    toggle.title = light ? 'Effets allégés pour fluidité' : 'Effets visuels activés';
-    toggle.setAttribute('aria-label', light ? 'Passer aux effets visuels' : 'Passer au rendu fluide');
+    toggle.title = light ? 'Affichage allégé pour plus de fluidité' : 'Affichage normal avec effets visuels';
+    toggle.setAttribute('aria-label', light ? 'Passer en affichage normal' : 'Passer en affichage rapide');
   });
 }
 
