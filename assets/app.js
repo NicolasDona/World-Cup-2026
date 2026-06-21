@@ -182,10 +182,10 @@ function applyPerformanceMode(mode) {
 
   els.perfToggles.forEach(toggle => {
     const light = performanceMode === 'light';
-    toggle.textContent = light ? 'Escrologiste' : 'Normal';
+    toggle.textContent = light ? 'Escrolo' : 'Normal';
     toggle.setAttribute('aria-pressed', String(light));
     toggle.title = light ? 'Affichage allégé pour plus de fluidité' : 'Affichage normal avec effets visuels';
-    toggle.setAttribute('aria-label', light ? 'Passer en affichage normal' : 'Passer en affichage escrologiste');
+    toggle.setAttribute('aria-label', light ? 'Passer en affichage normal' : 'Passer en affichage escrolo');
   });
 }
 
