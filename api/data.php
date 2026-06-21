@@ -521,6 +521,53 @@ function legacyCachedScorersForMatch(array $match): array
     return [];
 }
 
+function eventDetailsSnapshotFileForMatch(array $match): string
+{
+    $matchId = (string) ($match['id'] ?? md5(json_encode($match)));
+    $cacheKey = substr(hash('sha256', THESPORTSDB_API_KEY), 0, 8);
+    $safeMatchId = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $matchId);
+    return CACHE_DIR . '/match_events_' . $cacheKey . '_' . $safeMatchId . '.json';
+}
+
+function cachedEventDetailsForMatch(array $match): array
+{
+    $file = eventDetailsSnapshotFileForMatch($match);
+    if (!is_file($file)) {
+        return ['scorers' => [], 'cards' => [], 'highlights' => []];
+    }
+
+    $cached = json_decode((string) file_get_contents($file), true);
+    if (!is_array($cached)) {
+        return ['scorers' => [], 'cards' => [], 'highlights' => []];
+    }
+
+    return [
+        'scorers'    => array_values(array_filter(is_array($cached['scorers'] ?? null) ? $cached['scorers'] : [], static fn ($item): bool => is_array($item))),
+        'cards'      => array_values(array_filter(is_array($cached['cards'] ?? null) ? $cached['cards'] : [], static fn ($item): bool => is_array($item))),
+        'highlights' => array_values(array_filter(is_array($cached['highlights'] ?? null) ? $cached['highlights'] : [], static fn ($item): bool => is_array($item))),
+    ];
+}
+
+function rememberEventDetailsForMatch(array $match, array $details): void
+{
+    $current = cachedEventDetailsForMatch($match);
+    $snapshot = [
+        'scorers'    => !empty($details['scorers']) ? $details['scorers'] : $current['scorers'],
+        'cards'      => !empty($details['cards']) ? $details['cards'] : $current['cards'],
+        'highlights' => !empty($details['highlights']) ? $details['highlights'] : $current['highlights'],
+        'updatedAt'  => gmdate('c'),
+    ];
+
+    if (empty($snapshot['scorers']) && empty($snapshot['cards']) && empty($snapshot['highlights'])) {
+        return;
+    }
+
+    @file_put_contents(
+        eventDetailsSnapshotFileForMatch($match),
+        json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+    );
+}
+
 function isMatchInsideLiveWindow(array $match): bool
 {
     $status = (string) ($match['status'] ?? '');
@@ -658,12 +705,19 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     $scoreKey = $isFinished ? '' : '_' . matchScoreTotal($match);
     $cacheFile = CACHE_DIR . '/match_details_' . $cacheKey . '_' . preg_replace('/[^a-zA-Z0-9_\-]/', '_', $matchId . $scoreKey) . '.json';
     $cacheTtl = $isFinished ? 21600 : 0;
+    $snapshot = cachedEventDetailsForMatch($match);
 
     if (!$isLiveData && is_file($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
         $cached = json_decode((string) file_get_contents($cacheFile), true);
         if (is_array($cached)) {
             if (empty($cached['scorers']) && matchScoreTotal($match) > 0) {
-                $cached['scorers'] = legacyCachedScorersForMatch($match);
+                $cached['scorers'] = $snapshot['scorers'] ?: legacyCachedScorersForMatch($match);
+            }
+            if (empty($cached['cards'])) {
+                $cached['cards'] = $snapshot['cards'];
+            }
+            if (empty($cached['highlights'])) {
+                $cached['highlights'] = $snapshot['highlights'];
             }
             return $cached;
         }
@@ -673,9 +727,9 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     $event = findSportsDbEvent($match);
     if (!$event || empty($event['idEvent'])) {
         $empty = [
-            'scorers' => legacyCachedScorersForMatch($match),
-            'cards' => [],
-            'highlights' => [],
+            'scorers' => $snapshot['scorers'] ?: legacyCachedScorersForMatch($match),
+            'cards' => $snapshot['cards'],
+            'highlights' => $snapshot['highlights'],
             'liveScore' => null,
             'liveStatus' => '',
         ];
@@ -689,12 +743,14 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     $eventAwayScore = $event['intAwayScore'] ?? null;
     $liveScore = null;
     if (is_numeric($eventHomeScore) && is_numeric($eventAwayScore)) {
-        $liveScore = [
-            'home'   => (int) $eventHomeScore,
-            'away'   => (int) $eventAwayScore,
-            'source' => 'TheSportsDB',
-        ];
-        $expectedGoals = (int) $eventHomeScore + (int) $eventAwayScore;
+        if (!$isFinished) {
+            $liveScore = [
+                'home'   => (int) $eventHomeScore,
+                'away'   => (int) $eventAwayScore,
+                'source' => 'TheSportsDB',
+            ];
+            $expectedGoals = (int) $eventHomeScore + (int) $eventAwayScore;
+        }
     }
 
     $timelineUrl = THESPORTSDB_BASE . '/' . rawurlencode(THESPORTSDB_API_KEY)
@@ -735,14 +791,19 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         }
     }
 
-    $completeGoals = count($goals) === $expectedGoals ? $goals : legacyCachedScorersForMatch($match);
+    $completeGoals = count($goals) === $expectedGoals ? $goals : ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match));
     $details = [
         'scorers'    => $completeGoals,
-        'cards'      => $cards,
+        'cards'      => $cards ?: $snapshot['cards'],
         'highlights' => ($match['status'] ?? '') === 'FINISHED' ? sportsDbHighlightsForEvent($event, $match) : [],
         'liveScore'  => $liveScore,
         'liveStatus' => trim((string) ($event['strStatus'] ?? '')),
     ];
+    if (empty($details['highlights'])) {
+        $details['highlights'] = $snapshot['highlights'];
+    }
+
+    rememberEventDetailsForMatch($match, $details);
 
     if (!$isLiveData) {
         @file_put_contents($cacheFile, json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
