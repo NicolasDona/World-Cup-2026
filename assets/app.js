@@ -2625,6 +2625,11 @@ function teamLabelFromRow(row) {
   return { team, name };
 }
 
+function finalStageProbableLine(row, group, name) {
+  const stats = standingLine(row, group);
+  return name && stats ? `${name} (${stats})` : stats;
+}
+
 function finalStageSeedLabel(seed) {
   const clean = String(seed || '').trim();
   const direct = clean.match(/^([12])([A-L])$/i);
@@ -2633,9 +2638,10 @@ function finalStageSeedLabel(seed) {
     const group = direct[2].toUpperCase();
     const row = standingRowBySeed(group, position);
     const resolved = teamLabelFromRow(row);
+    const probable = finalStageProbableLine(row, group, resolved.name);
     return {
       label: resolved.name || `${position === 1 ? '1er' : '2e'} gr. ${group}`,
-      help: row ? `${position === 1 ? 'Vainqueur' : 'Deuxième'} du groupe ${group} : ${standingLine(row, group)}.` : `${position === 1 ? 'Vainqueur' : 'Deuxième'} du groupe ${group}.`,
+      help: row ? `${position === 1 ? 'Vainqueur probable' : 'Deuxième probable'} du groupe ${group} : ${probable}.` : `${position === 1 ? 'Vainqueur' : 'Deuxième'} du groupe ${group}.`,
       team: resolved.team,
     };
   }
@@ -2646,9 +2652,10 @@ function finalStageSeedLabel(seed) {
     const candidate = bestThirdCandidate(groups);
     if (candidate) {
       const resolved = teamLabelFromRow(candidate.row);
+      const probable = finalStageProbableLine(candidate.row, candidate.group, resolved.name);
       return {
         label: resolved.name || `3e gr. ${candidate.group}`,
-        help: `Meilleur troisième probable parmi les groupes ${groups.join(', ')} : ${standingLine(candidate.row, candidate.group)}.`,
+        help: `Meilleur troisième probable parmi les groupes ${groups.join(', ')} : ${probable}.`,
         team: resolved.team,
       };
     }
