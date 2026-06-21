@@ -2593,6 +2593,12 @@ function standingRowBySeed(group, position) {
   return (standing?.table || []).find(row => Number(row.position) === position) || null;
 }
 
+function finalStageGroupComplete(group) {
+  const standing = state.standings.find(item => groupLetter(item.group || item.stage || '') === group);
+  const rows = standing?.table || [];
+  return rows.length > 0 && rows.every(row => Number(row.playedGames || 0) >= 3);
+}
+
 function standingLine(row, group) {
   if (!row) return '';
   const points = Number(row.points || 0);
@@ -2639,10 +2645,11 @@ function finalStageSeedLabel(seed) {
     const row = standingRowBySeed(group, position);
     const resolved = teamLabelFromRow(row);
     const probable = finalStageProbableLine(row, group, resolved.name);
+    const confirmed = finalStageGroupComplete(group);
     return {
-      label: resolved.name || `${position === 1 ? '1er' : '2e'} gr. ${group}`,
-      help: row ? `${position === 1 ? 'Vainqueur probable' : 'Deuxième probable'} du groupe ${group} : ${probable}.` : `${position === 1 ? 'Vainqueur' : 'Deuxième'} du groupe ${group}.`,
-      team: resolved.team,
+      label: confirmed && resolved.name ? resolved.name : `${position === 1 ? '1er' : '2e'} gr. ${group}`,
+      help: row ? `${position === 1 ? (confirmed ? 'Vainqueur' : 'Vainqueur probable') : (confirmed ? 'Deuxième' : 'Deuxième probable')} du groupe ${group} : ${probable}.` : `${position === 1 ? 'Vainqueur' : 'Deuxième'} du groupe ${group}.`,
+      team: confirmed ? resolved.team : null,
     };
   }
 
@@ -2653,10 +2660,11 @@ function finalStageSeedLabel(seed) {
     if (candidate) {
       const resolved = teamLabelFromRow(candidate.row);
       const probable = finalStageProbableLine(candidate.row, candidate.group, resolved.name);
+      const confirmed = groups.every(finalStageGroupComplete);
       return {
-        label: resolved.name || `3e gr. ${candidate.group}`,
-        help: `Meilleur troisième probable parmi les groupes ${groups.join(', ')} : ${probable}.`,
-        team: resolved.team,
+        label: confirmed && resolved.name ? resolved.name : `3e gr. ${groups.join('/')}`,
+        help: `Meilleur troisième ${confirmed ? 'confirmé' : 'probable'} parmi les groupes ${groups.join(', ')} : ${probable}.`,
+        team: confirmed ? resolved.team : null,
       };
     }
 
