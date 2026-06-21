@@ -667,6 +667,54 @@ function espnDetailsForMatch(array $match): array
     ];
 }
 
+function eventMinuteValue(array $event): int
+{
+    $minute = $event['minute'] ?? null;
+    return is_numeric($minute) ? (int) $minute : 999;
+}
+
+function playerLastNameKey(string $player): string
+{
+    $parts = preg_split('/\s+/', trim($player));
+    $last = is_array($parts) && $parts !== [] ? (string) end($parts) : $player;
+    return normalizedTeamName($last);
+}
+
+function cardDedupeKey(array $card): string
+{
+    $type = strtolower((string) ($card['type'] ?? 'yellow'));
+    $minute = is_numeric($card['minute'] ?? null) ? (string) ((int) $card['minute']) : 'na';
+    $side = strtolower((string) ($card['teamSide'] ?? ''));
+    $player = playerLastNameKey((string) ($card['player'] ?? ''));
+
+    return implode('|', [$minute, $type, $side, $player]);
+}
+
+function mergeCardEvents(array ...$cardLists): array
+{
+    $merged = [];
+    $seen = [];
+
+    foreach ($cardLists as $cards) {
+        foreach ($cards as $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+
+            $key = cardDedupeKey($card);
+            if ($key === 'na|yellow||' || isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $merged[] = $card;
+        }
+    }
+
+    usort($merged, static fn (array $a, array $b): int => eventMinuteValue($a) <=> eventMinuteValue($b));
+    return $merged;
+}
+
 function matchScoreTotal(array $match): int
 {
     $home = $match['score']['fullTime']['home'] ?? $match['score']['regularTime']['home'] ?? null;
@@ -921,7 +969,7 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         $espn = $getEspnDetails();
         $empty = [
             'scorers' => $espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)),
-            'cards' => $espn['cards'] ?: $snapshot['cards'],
+            'cards' => mergeCardEvents($espn['cards'] ?? [], $snapshot['cards']),
             'highlights' => $snapshot['highlights'],
             'liveScore' => null,
             'liveStatus' => '',
@@ -986,13 +1034,13 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     }
 
     $espn = [];
-    if ((count($goals) !== $expectedGoals && $expectedGoals > 0) || empty($cards)) {
+    if ((count($goals) !== $expectedGoals && $expectedGoals > 0) || $isLiveData || empty($cards)) {
         $espn = $getEspnDetails();
     }
     $completeGoals = count($goals) === $expectedGoals ? $goals : ($espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)));
     $details = [
         'scorers'    => $completeGoals,
-        'cards'      => $cards ?: ($espn['cards'] ?? []) ?: $snapshot['cards'],
+        'cards'      => mergeCardEvents($cards, $espn['cards'] ?? [], $snapshot['cards']),
         'highlights' => ($match['status'] ?? '') === 'FINISHED' ? sportsDbHighlightsForEvent($event, $match) : [],
         'liveScore'  => $liveScore,
         'liveStatus' => trim((string) ($event['strStatus'] ?? '')),
