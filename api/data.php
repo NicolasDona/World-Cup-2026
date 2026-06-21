@@ -830,6 +830,64 @@ function enrichMatchesWithDetails(array $matches, bool $bypassLiveCache = false)
     }, $matches);
 }
 
+function applyKnownMatchCorrections(array $matches): array
+{
+    return array_map(static function (array $match): array {
+        if ((string) ($match['id'] ?? '') !== '537371') {
+            return $match;
+        }
+
+        $match['score']['winner'] = 'HOME_TEAM';
+        $match['score']['duration'] = $match['score']['duration'] ?? 'REGULAR';
+        $match['score']['fullTime']['home'] = 4;
+        $match['score']['fullTime']['away'] = 0;
+        $match['score']['regularTime']['home'] = 4;
+        $match['score']['regularTime']['away'] = 0;
+        unset($match['liveScore']);
+
+        $match['scorers'] = [
+            [
+                'teamSide' => 'home',
+                'team'     => 'Spain',
+                'player'   => 'L. Yamal',
+                'minute'   => 10,
+                'assist'   => '',
+                'detail'   => 'Goal',
+                'source'   => 'Manual verification',
+            ],
+            [
+                'teamSide' => 'home',
+                'team'     => 'Spain',
+                'player'   => 'M. Oyarzabal',
+                'minute'   => 21,
+                'assist'   => '',
+                'detail'   => 'Goal',
+                'source'   => 'Manual verification',
+            ],
+            [
+                'teamSide' => 'home',
+                'team'     => 'Spain',
+                'player'   => 'M. Oyarzabal',
+                'minute'   => 24,
+                'assist'   => '',
+                'detail'   => 'Goal',
+                'source'   => 'Manual verification',
+            ],
+            [
+                'teamSide' => 'home',
+                'team'     => 'Spain',
+                'player'   => 'H. Al-Tambakti',
+                'minute'   => 49,
+                'assist'   => '',
+                'detail'   => 'Own Goal',
+                'source'   => 'Manual verification',
+            ],
+        ];
+
+        return $match;
+    }, $matches);
+}
+
 function compactTeamRef(array $team): array
 {
     return [
@@ -974,6 +1032,7 @@ if ($hasHardError) {
 
 $matchList = is_array($matches['data']['matches'] ?? null) ? $matches['data']['matches'] : [];
 $matchList = enrichMatchesWithDetails($matchList, $liveRefresh);
+$matchList = applyKnownMatchCorrections($matchList);
 $teamList = is_array($teams['data']['teams'] ?? null) ? $teams['data']['teams'] : [];
 $standingList = is_array($standings['data']['standings'] ?? null) ? $standings['data']['standings'] : [];
 $newsList = fetchNews('global');
