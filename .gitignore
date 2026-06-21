@@ -1,0 +1,29 @@
+# Local secrets
+.env
+api/config.php
+
+# Runtime caches
+api/cache/*
+storage/cache/*
+!api/cache/index.html
+!storage/cache/index.html
+
+# Logs
+*.log
+php-server.out.log
+php-server.err.log
+
+# Local/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local backups
+*_backup*
+assets/app_backup_*.js
+
+# Private audits / notes
+AUDIT_*.md
+PROJET_*.md
+README.txt
