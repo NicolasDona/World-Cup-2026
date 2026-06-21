@@ -1237,10 +1237,29 @@ function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
 function liveEventsSummaryHtml(match) {
   const scorers = Array.isArray(match.scorers) ? match.scorers : [];
   const cards = Array.isArray(match.cards) ? match.cards : [];
+  const score = readMatchScore(match);
+  const scoreGoals = score ? score.home + score.away : 0;
 
-  if (!scorers.length && !cards.length) {
+  if (!scorers.length && !cards.length && !scoreGoals) {
     return '';
   }
+
+  const fallbackGoalItems = !scorers.length && scoreGoals
+    ? [
+        ['home', match.homeTeam, score.home],
+        ['away', match.awayTeam, score.away],
+      ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
+        const teamName = team?.name || team?.shortName || 'Équipe';
+        return `<li>
+          <span class="live-event-minute">But</span>
+          <span class="live-event-icon match-info-icon ball-icon" aria-hidden="true"></span>
+          <span class="live-event-body">
+            <strong>${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - ${teamName}`)}</strong>
+            <small>${eventTeamVisual(match, { teamSide: side, team: teamName })}${escapeHtml('Buteur' + (goals > 1 ? 's' : '') + ' à confirmer par la source')}</small>
+          </span>
+        </li>`;
+      })
+    : [];
 
   const goalItems = scorers.map(goal => {
     const goalMinute = Number(goal.minute);
@@ -1276,7 +1295,7 @@ function liveEventsSummaryHtml(match) {
 
   return `<div class="live-match-feed">
     <strong>Actions live</strong>
-    <ul>${[...goalItems, ...cardItems].join('')}</ul>
+    <ul>${[...goalItems, ...fallbackGoalItems, ...cardItems].join('')}</ul>
   </div>`;
 }
 
