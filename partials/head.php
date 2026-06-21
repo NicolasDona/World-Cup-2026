@@ -3,6 +3,8 @@ if (!defined('WORLD_CUP_APP')) {
     http_response_code(403);
     exit;
 }
+$host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+$showPsyomReturnHome = in_array($host, ['psyom.eu', 'www.psyom.eu'], true);
 ?>
 <!doctype html>
 <html lang="fr">
@@ -34,6 +36,7 @@ if (!defined('WORLD_CUP_APP')) {
   <!-- Feuille de style principale (versionnée pour cache-busting) -->
   <link rel="stylesheet" href="assets/styles.css?v=<?= $assetVersions['css'] ?>">
 
+  <?php if ($showPsyomReturnHome): ?>
   <!-- psyom-return-home -->
   <style>
     .psyom-return-home {
@@ -95,6 +98,9 @@ if (!defined('WORLD_CUP_APP')) {
       .psyom-return-home { display: none; }
     }
   </style>
+  <?php endif; ?>
 </head>
 <body>
+  <?php if ($showPsyomReturnHome): ?>
   <a class="psyom-return-home" href="https://psyom.eu/" rel="home">Retour</a>
+  <?php endif; ?>
