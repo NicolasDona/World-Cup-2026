@@ -469,6 +469,43 @@ function playerName(player = {}) {
   return player.name || [player.firstName, player.lastName].filter(Boolean).join(' ') || 'Joueur';
 }
 
+function playerLastName(value = '') {
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
+  return parts.length ? norm(parts[parts.length - 1]) : '';
+}
+
+function initialForName(value = '') {
+  const first = String(value || '').trim().charAt(0);
+  return first ? norm(first) : '';
+}
+
+function resolveSquadPlayerName(player = '', team = null) {
+  const raw = String(player || '').trim();
+  if (!raw || !team) return raw;
+
+  const fullTeam = teamLookup(team);
+  const squad = Array.isArray(fullTeam.squad) ? fullTeam.squad : [];
+  if (!squad.length) return raw;
+
+  const rawNorm = norm(raw);
+  const exact = squad.find(candidate => norm(playerName(candidate)) === rawNorm);
+  if (exact) return playerName(exact);
+
+  const abbreviated = raw.match(/^([A-Za-zÀ-ÿ])\.\s*(.+)$/u);
+  if (!abbreviated) return raw;
+
+  const initial = norm(abbreviated[1]);
+  const lastName = norm(abbreviated[2]);
+  const match = squad.find(candidate => {
+    const name = playerName(candidate);
+    const candidateLast = playerLastName(candidate.lastName || name);
+    const candidateInitial = initialForName(candidate.firstName || name);
+    return candidateLast === lastName && candidateInitial === initial;
+  });
+
+  return match ? playerName(match) : raw;
+}
+
 function playerPosition(player = {}) {
   const raw = String(player.position || player.role || '').trim();
   const key = norm(raw);
@@ -863,7 +900,7 @@ function openEfficiencyHelpModal() {
   els.infoModalContent.innerHTML = `
     <div class="info-sheet rating-help-sheet">
       <p class="eyebrow">Méthode</p>
-      <h2 id="infoModalTitle">Comment est calculée la note ?</h2>
+      <h2 id="infoModalTitle">Comment est calculée la note?</h2>
       <p>La note va de 0 à 100. Elle mesure la performance réelle d'une équipe sur ses matchs terminés ou en direct, puis affiche la moyenne.</p>
       <div class="rating-help-grid">
         <section>
@@ -882,7 +919,7 @@ function openEfficiencyHelpModal() {
           <p>L'écart au score valorise les victoires nettes et pénalise les défaites lourdes.</p>
         </section>
       </div>
-      <p class="rating-help-note"><strong>Adversité</strong> indique la difficulté moyenne des adversaires rencontrés. Plus elle est haute, plus la note a été obtenue contre des équipes fortes.</p>
+      <p class="rating-help-note"><strong>Adversité</strong> indique la difficulté moyenne des adversaires rencontrés. Elle part du niveau estimé de l'adversaire, puis reste plafonnée pour éviter de transformer un duel moyen en exploit irréaliste.</p>
     </div>`;
 
   els.infoModal.hidden = false;
@@ -1138,7 +1175,27 @@ function goalDetailLabel(goal = {}) {
 
   const detail = String(goal.detail || '').trim();
   if (!detail || /^normal goal$/i.test(detail)) return '';
-  if (/^penalty$/i.test(detail)) return 'Penalty';
+  const normalized = norm(detail);
+  const labels = [
+    [/free\s*kick|free-kick|coup\s*franc/, 'Coup franc'],
+    [/header|head/, 'Tête'],
+    [/volley|volee|volée/, 'Volée'],
+    [/penalty/, 'Penalty'],
+    [/own\s*goal|csc/, 'CSC'],
+    [/^goal$/, 'But'],
+  ];
+  const match = labels.find(([pattern]) => pattern.test(normalized));
+  return match ? match[1] : detail;
+}
+
+function cardDetailLabel(card = {}) {
+  const type = card.type === 'red' ? 'rouge' : 'jaune';
+  const detail = String(card.detail || '').trim();
+  if (!detail) return `Carton ${type}`;
+
+  const normalized = norm(detail);
+  if (normalized.includes('red card') || normalized.includes('carton rouge')) return 'Carton rouge';
+  if (normalized.includes('yellow card') || normalized.includes('carton jaune')) return 'Carton jaune';
   return detail;
 }
 
@@ -1178,6 +1235,20 @@ function eventTeamVisual(match, event = {}) {
     : '';
 }
 
+function eventTeamName(match, event = {}, fallback = 'Équipe non précisée') {
+  if (event.teamSide === 'home') {
+    const team = teamLookup(match.homeTeam);
+    return team.name || team.shortName || team.tla || fallback;
+  }
+
+  if (event.teamSide === 'away') {
+    const team = teamLookup(match.awayTeam);
+    return team.name || team.shortName || team.tla || fallback;
+  }
+
+  return event.team || fallback;
+}
+
 function eventTeamObject(match, event = {}) {
   if (event.teamSide === 'home') return teamLookup(match.homeTeam);
   if (event.teamSide === 'away') return teamLookup(match.awayTeam);
@@ -1212,6 +1283,17 @@ function scoreForTeamInMatch(match, team) {
   if (key && key === homeKey) return { goalsFor: goals.home, goalsAgainst: goals.away };
   if (key && key === awayKey) return { goalsFor: goals.away, goalsAgainst: goals.home };
   return null;
+}
+
+function scorerIdentity(match = {}, goal = {}) {
+  const team = eventTeamObject(match, goal);
+  const teamName = team?.name || team?.shortName || goal.team || '';
+  const player = resolveSquadPlayerName(goal.player, team);
+  return {
+    player,
+    team: teamName,
+    key: `${norm(player)}|${norm(teamName)}`,
+  };
 }
 
 function missingGoalSummaries(match, scorers = []) {
@@ -1249,19 +1331,7 @@ function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
     const score = readMatchScore(match);
     if (!score || score.home + score.away <= 0) return '';
 
-    const fallbackItems = [
-      ['home', match.homeTeam, score.home],
-      ['away', match.awayTeam, score.away],
-    ].filter(([, , goals]) => goals > 0).map(([side, team, goals]) => {
-      const teamName = team?.name || team?.shortName || 'Équipe';
-      return `<span class="score-event is-score-fallback">
-        <span class="match-info-icon ball-icon" aria-label="But"></span>
-        ${eventTeamVisual(match, { teamSide: side, team: teamName })}
-        ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}
-      </span>`;
-    }).join('');
-
-    return fallbackItems ? `<small class="${className}">${fallbackItems}</small>` : '';
+    return '';
   }
 
   const visibleScorers = Number.isFinite(limit) ? scorers.slice(0, limit) : scorers;
@@ -1278,17 +1348,8 @@ function scorersHtml(match, className = 'match-scorers', limit = Infinity) {
     </span>`;
   }).join('');
 
-  const missingItems = missingGoals.map(([side, team, goals]) => {
-    const teamName = team?.name || team?.shortName || 'Equipe';
-    return `<span class="score-event is-score-fallback">
-      <span class="match-info-icon ball-icon" aria-label="But"></span>
-      ${eventTeamVisual(match, { teamSide: side, team: teamName })}
-      ${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}
-    </span>`;
-  }).join('');
-
   const more = hiddenCount > 0 ? `<span class="score-event is-more">+${hiddenCount} but${hiddenCount > 1 ? 's' : ''}</span>` : '';
-  return `<small class="${className}">${items}${missingItems}${more}</small>`;
+  return `<small class="${className}">${items}${more}</small>`;
 }
 
 function liveEventsSummaryHtml(match) {
@@ -1296,25 +1357,10 @@ function liveEventsSummaryHtml(match) {
   const cards = Array.isArray(match.cards) ? match.cards : [];
   const score = readMatchScore(match);
   const scoreGoals = score ? score.home + score.away : 0;
-  const missingGoals = missingGoalSummaries(match, scorers);
 
   if (!scorers.length && !cards.length && !scoreGoals) {
     return '';
   }
-
-  const fallbackGoalItems = missingGoals.length
-    ? missingGoals.map(([side, team, goals]) => {
-        const teamName = team?.name || team?.shortName || 'Équipe';
-        return `<li>
-          <span class="live-event-minute">But</span>
-          <span class="live-event-icon match-info-icon ball-icon" aria-hidden="true"></span>
-          <span class="live-event-body">
-            <strong>${escapeHtml(`${goals} but${goals > 1 ? 's' : ''} - buteur${goals > 1 ? 's' : ''} à confirmer`)}</strong>
-            <small>${eventTeamVisual(match, { teamSide: side, team: teamName })}${escapeHtml('Buteur' + (goals > 1 ? 's' : '') + ' à confirmer par la source')}</small>
-          </span>
-        </li>`;
-      })
-    : [];
 
   const goalItems = scorers.map(goal => {
     const goalMinute = Number(goal.minute);
@@ -1328,7 +1374,7 @@ function liveEventsSummaryHtml(match) {
       <span class="live-event-icon match-info-icon ball-icon" aria-hidden="true"></span>
       <span class="live-event-body">
         <strong>${escapeHtml(`${goalMainLabel(goal)} - ${goal.player || 'joueur non précisé'}`)}</strong>
-        <small>${eventTeamVisual(match, goal)}${escapeHtml((goal.team || 'Équipe non précisée') + detailText + assist)}</small>
+        <small>${eventTeamVisual(match, goal)}${escapeHtml(eventTeamName(match, goal) + detailText + assist)}</small>
       </span>
     </li>`;
   });
@@ -1336,11 +1382,12 @@ function liveEventsSummaryHtml(match) {
   const cardItems = cards.slice(0, 3).map(card => {
     const cardMinute = Number(card.minute);
     const minute = Number.isFinite(cardMinute) ? `${cardMinute}'` : 'Carton';
-    const type = card.type === 'red' ? 'rouge' : 'jaune';
+    const cardClass = card.type === 'red' ? 'red' : 'yellow';
+    const type = cardClass === 'red' ? 'rouge' : 'jaune';
 
     return `<li>
       <span class="live-event-minute">${escapeHtml(minute)}</span>
-      <span class="live-event-icon match-info-icon card-icon ${type}" aria-hidden="true"></span>
+      <span class="live-event-icon match-info-icon card-icon ${cardClass}" aria-hidden="true"></span>
       <span class="live-event-body">
         <strong>${escapeHtml(card.player || 'Joueur non précisé')}</strong>
         <small>${eventTeamVisual(match, card)}Carton ${type}</small>
@@ -1350,7 +1397,7 @@ function liveEventsSummaryHtml(match) {
 
   return `<div class="live-match-feed">
     <strong>Actions live</strong>
-    <ul>${[...goalItems, ...fallbackGoalItems, ...cardItems].join('')}</ul>
+    <ul>${[...goalItems, ...cardItems].join('')}</ul>
   </div>`;
 }
 
@@ -1413,10 +1460,10 @@ function findMatchByDomId(value) {
 function premiumSignalsHtml(match, className = '') {
   const scorers = Array.isArray(match.scorers) ? match.scorers.length : 0;
   const cards = Array.isArray(match.cards) ? match.cards.length : 0;
-  const hasLiveScore = Boolean(match.liveScore);
+  const hasScore = Boolean(readMatchScore(match));
   const isFinished = isFinishedMatch(match);
   const signals = [
-    hasLiveScore ? (isFinished ? ['Score final', 'Validé'] : ['Live', 'Score en cours']) : null,
+    hasScore ? (isFinished ? ['Score final', 'Validé'] : ['Live', 'Score en cours']) : null,
     scorers ? [`${scorers} buteur${scorers > 1 ? 's' : ''}`, 'Confirmé'] : null,
     cards ? [`${cards} carton${cards > 1 ? 's' : ''}`, 'Signalé'] : null,
   ].filter(Boolean);
@@ -1438,8 +1485,6 @@ function matchDetailButtonHtml(match, className = '') {
 
 function matchTimelineEvents(match = {}) {
   const rawScorers = Array.isArray(match.scorers) ? match.scorers : [];
-  const missingGoals = missingGoalSummaries(match, rawScorers);
-
   const scorers = rawScorers.map(goal => ({
     kind: isOwnGoalEvent(goal) ? 'own-goal' : 'goal',
     label: goalMainLabel(goal),
@@ -1452,34 +1497,18 @@ function matchTimelineEvents(match = {}) {
     source: goal.source || 'TheSportsDB',
   }));
 
-  const fallbackGoals = missingGoals.length
-    ? missingGoals.map(([side, team, goals]) => {
-        const teamName = team?.name || team?.shortName || 'Équipe';
-        return {
-          kind: 'goal',
-          label: `${goals} but${goals > 1 ? 's' : ''}`,
-          player: teamName,
-          detail: `Buteur${goals > 1 ? 's' : ''} à confirmer par la source`,
-          minute: null,
-          teamSide: side,
-          team: teamName,
-          source: 'Score officiel',
-        };
-      })
-    : [];
-
   const cards = (Array.isArray(match.cards) ? match.cards : []).map(card => ({
     kind: card.type === 'red' ? 'red-card' : 'yellow-card',
     label: card.type === 'red' ? 'Carton rouge' : 'Carton jaune',
     player: card.player,
-    detail: card.detail,
+    detail: cardDetailLabel(card),
     minute: Number.isFinite(card.minute) ? card.minute : null,
     teamSide: card.teamSide,
     team: card.team,
     source: card.source || 'TheSportsDB',
   }));
 
-  return [...scorers, ...fallbackGoals, ...cards].sort((a, b) => {
+  return [...scorers, ...cards].sort((a, b) => {
     const ma = Number.isFinite(a.minute) ? a.minute : 999;
     const mb = Number.isFinite(b.minute) ? b.minute : 999;
     return ma - mb;
@@ -1490,14 +1519,31 @@ function matchTimelineHtml(match = {}) {
   const events = matchTimelineEvents(match);
 
   if (!events.length) {
-    return `<div class="premium-empty">La fiche est prête. Les événements détaillés apparaîtront ici dès qu’ils seront disponibles.</div>`;
+    const score = readMatchScore(match);
+    if (score) {
+      const home = teamLookup(match.homeTeam);
+      const away = teamLookup(match.awayTeam);
+      return `<div class="premium-empty">
+        <strong>Score final : ${escapeHtml(home.name || home.shortName || 'Équipe')} ${score.home} - ${score.away} ${escapeHtml(away.name || away.shortName || 'Équipe')}</strong>
+        <span>Les buteurs et cartons détaillés ne sont pas fournis pour ce match.</span>
+      </div>`;
+    }
+
+    return `<div class="premium-empty">Les événements détaillés apparaîtront ici dès qu’ils seront disponibles.</div>`;
   }
 
   const eventHtml = events.map(event => {
     const minute = Number.isFinite(event.minute) ? `${event.minute}'` : '--';
     const assist = event.assist ? `<small>Passe : ${escapeHtml(event.assist)}</small>` : '';
+    const eventIcon = event.kind === 'red-card'
+      ? '<span class="match-info-icon card-icon red" aria-hidden="true"></span>'
+      : event.kind === 'yellow-card'
+        ? '<span class="match-info-icon card-icon yellow" aria-hidden="true"></span>'
+        : '<span class="match-info-icon ball-icon" aria-hidden="true"></span>';
+
     return `<article class="premium-event ${escapeHtml(event.kind)}">
       <span class="premium-minute">${escapeHtml(minute)}</span>
+      ${eventIcon}
       ${eventTeamVisual(match, event)}
       <span class="premium-event-main">
         <strong>${escapeHtml(event.label)} - ${escapeHtml(event.player || 'Joueur')}</strong>
@@ -1636,6 +1682,14 @@ function expectedResultShare(teamRank, opponentRank) {
   return 1 / (1 + Math.pow(10, (opponentRating - teamRating) / 28));
 }
 
+function adversaryDifficultyCap(opponentRank) {
+  if (!Number.isFinite(opponentRank)) return 75;
+  if (opponentRank <= 10) return 100;
+  if (opponentRank <= 25) return 85;
+  if (opponentRank <= 50) return 75;
+  return 65;
+}
+
 function matchEfficiencyRating(team, opponent, goalsFor, goalsAgainst) {
   const teamRank = fifaRankForTeam(team);
   const opponentRank = fifaRankForTeam(opponent);
@@ -1660,7 +1714,7 @@ function matchEfficiencyRating(team, opponent, goalsFor, goalsAgainst) {
   return {
     note,
     expected,
-    difficulty: clamp(100 - (expected * 55), 45, 100),
+    difficulty: Math.min(clamp(100 - (expected * 55), 45, 100), adversaryDifficultyCap(opponentRank)),
   };
 }
 
@@ -2283,12 +2337,10 @@ function computeTopScorersRanking() {
     .filter(match => (isFinishedMatch(match) || isLiveMatch(match)) && Array.isArray(match.scorers))
     .forEach(match => {
       match.scorers.forEach(goal => {
-        const player = String(goal.player || '').trim();
-        if (!player) return;
         if (isOwnGoalEvent(goal)) return;
 
-        const team = String(goal.team || '').trim();
-        const key = `${norm(player)}|${norm(team)}`;
+        const { player, team, key } = scorerIdentity(match, goal);
+        if (!player) return;
         const current = scorers.get(key) || {
           player,
           team,
@@ -2355,16 +2407,16 @@ function computePlayerPerformanceRanking() {
         const lateBonus = Number.isFinite(minute) && minute >= 75 ? 4 : 0;
         const tightGameBonus = Math.abs(goalsFor - goalsAgainst) <= 1 ? 6 : 0;
         const winBonus = goalsFor > goalsAgainst ? 4 : (goalsFor === goalsAgainst ? 2 : 0);
-        const scorerTeam = goal.team || team?.name || team?.shortName || '';
+        const scorer = scorerIdentity(match, goal);
 
-        addPlayerPerformance(players, goal.player, scorerTeam, {
+        addPlayerPerformance(players, scorer.player, scorer.team, {
           goals: 1,
           points: 24 + (difficulty * 0.12) + tightGameBonus + winBonus + lateBonus,
           difficulty,
         }, matchId);
 
         if (goal.assist) {
-          addPlayerPerformance(players, goal.assist, scorerTeam, {
+          addPlayerPerformance(players, resolveSquadPlayerName(goal.assist, team), scorer.team, {
             assists: 1,
             points: 15 + (difficulty * 0.08) + (tightGameBonus * 0.45) + (winBonus * 0.45),
             difficulty,
@@ -2578,12 +2630,10 @@ function renderTopScorers() {
     .filter(match => (isFinishedMatch(match) || isLiveMatch(match)) && Array.isArray(match.scorers))
     .forEach(match => {
       match.scorers.forEach(goal => {
-        const player = String(goal.player || '').trim();
-        if (!player) return;
         if (isOwnGoalEvent(goal)) return;
 
-        const team = String(goal.team || '').trim();
-        const key = `${norm(player)}|${norm(team)}`;
+        const { player, team, key } = scorerIdentity(match, goal);
+        if (!player) return;
         const current = scorers.get(key) || {
           player,
           team,

@@ -21,7 +21,11 @@ require __DIR__ . '/config.php';
 
 // Pendant la Coupe du Monde, les actualités doivent bouger vite.
 // Le front interroge déjà ce proxy toutes les 60 secondes.
+const DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS = 60;
 const NEWS_CACHE_TTL_SECONDS = 120;
+const RECENT_FINISHED_MATCH_WINDOW_SECONDS = 86400;
+const RECENT_FINISHED_MATCH_DETAILS_TTL_SECONDS = 600;
+const FINISHED_MATCH_DETAILS_TTL_SECONDS = 21600;
 const ESPN_SCOREBOARD_URL = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
 
 // ── En-têtes HTTP de la réponse ──────────────────────────────────────────────
@@ -59,9 +63,31 @@ function readDashboardPayloadCache(): ?array
         return null;
     }
 
+    if (time() - filemtime(DASHBOARD_PAYLOAD_CACHE_FILE) > DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS) {
+        return null;
+    }
+
     $raw = file_get_contents(DASHBOARD_PAYLOAD_CACHE_FILE);
     $payload = is_string($raw) ? json_decode($raw, true) : null;
-    return is_array($payload) && ($payload['ok'] ?? false) ? $payload : null;
+    if (!is_array($payload) || !($payload['ok'] ?? false)) {
+        return null;
+    }
+
+    $matches = is_array($payload['matches'] ?? null) ? $payload['matches'] : [];
+    foreach ($matches as $match) {
+        if (!is_array($match) || (string) ($match['status'] ?? '') !== 'FINISHED') {
+            continue;
+        }
+
+        $expectedGoals = matchScoreTotal($match);
+        $scorers = is_array($match['scorers'] ?? null) ? $match['scorers'] : [];
+        if ($expectedGoals > 0 && count($scorers) !== $expectedGoals) {
+            @unlink(DASHBOARD_PAYLOAD_CACHE_FILE);
+            return null;
+        }
+    }
+
+    return $payload;
 }
 
 function writeDashboardPayloadCache(array $payload): void
@@ -933,7 +959,11 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     $cacheKey = substr(hash('sha256', THESPORTSDB_API_KEY), 0, 8);
     $scoreKey = $isFinished ? '' : '_' . matchScoreTotal($match);
     $cacheFile = CACHE_DIR . '/match_details_' . $cacheKey . '_' . preg_replace('/[^a-zA-Z0-9_\-]/', '_', $matchId . $scoreKey) . '.json';
-    $cacheTtl = $isFinished ? 21600 : 0;
+    $kickoff = strtotime((string) ($match['utcDate'] ?? ''));
+    $isRecentlyFinished = $isFinished && $kickoff !== false && (time() - $kickoff < RECENT_FINISHED_MATCH_WINDOW_SECONDS);
+    $cacheTtl = $isFinished
+        ? ($isRecentlyFinished ? RECENT_FINISHED_MATCH_DETAILS_TTL_SECONDS : FINISHED_MATCH_DETAILS_TTL_SECONDS)
+        : 0;
     $snapshot = cachedEventDetailsForMatch($match);
     $espnDetails = null;
     $getEspnDetails = static function () use (&$espnDetails, $match): array {
@@ -946,6 +976,11 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
     if (!$isLiveData && is_file($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
         $cached = json_decode((string) file_get_contents($cacheFile), true);
         if (is_array($cached)) {
+            $cachedScorers = is_array($cached['scorers'] ?? null) ? $cached['scorers'] : [];
+            $hasCompleteCachedScorers = $expectedGoals <= 0 || count($cachedScorers) === $expectedGoals;
+            if ($isFinished && !$hasCompleteCachedScorers) {
+                @unlink($cacheFile);
+            } else {
             $espn = [];
             if (empty($cached['scorers']) && matchScoreTotal($match) > 0) {
                 $espn = $getEspnDetails();
@@ -960,8 +995,8 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
             }
             rememberEventDetailsForMatch($match, $cached);
             return $cached;
+            }
         }
-        return ['scorers' => [], 'cards' => [], 'highlights' => []];
     }
 
     $event = findSportsDbEvent($match);
@@ -1038,9 +1073,12 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         $espn = $getEspnDetails();
     }
     $completeGoals = count($goals) === $expectedGoals ? $goals : ($espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)));
+    $completeCards = !empty($cards)
+        ? mergeCardEvents($cards)
+        : mergeCardEvents($espn['cards'] ?? [], $snapshot['cards']);
     $details = [
         'scorers'    => $completeGoals,
-        'cards'      => mergeCardEvents($cards, $espn['cards'] ?? [], $snapshot['cards']),
+        'cards'      => $completeCards,
         'highlights' => ($match['status'] ?? '') === 'FINISHED' ? sportsDbHighlightsForEvent($event, $match) : [],
         'liveScore'  => $liveScore,
         'liveStatus' => trim((string) ($event['strStatus'] ?? '')),
