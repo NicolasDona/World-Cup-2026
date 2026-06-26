@@ -24,6 +24,9 @@ Thumbs.db
 assets/app_backup_*.js
 *.zip
 
+# Local tools
+tools/eurosport-live-collector/
+
 # Private audits / notes
 AUDIT_*.md
 PROJET_*.md
