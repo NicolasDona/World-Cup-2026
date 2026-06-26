@@ -22,6 +22,7 @@ Thumbs.db
 # Local backups
 *_backup*
 assets/app_backup_*.js
+*.zip
 
 # Private audits / notes
 AUDIT_*.md
