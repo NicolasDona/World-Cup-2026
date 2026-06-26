@@ -18,6 +18,7 @@ if (!defined('WORLD_CUP_APP')) {
     <div class="signature-footer">
       <span>Built to make public data readable.</span>
       <span><?= htmlspecialchars($frontVersion, ENT_QUOTES, 'UTF-8') ?></span>
-      <a href="https://psyom.eu/" rel="home">by psyom</a>
+      <a class="signature-psyom" href="https://psyom.eu/" rel="home">by psyom</a>
+      <a class="signature-github" href="https://github.com/NicolasDona/World-Cup-2026" target="_blank" rel="noopener noreferrer">Code open source sur GitHub</a>
     </div>
   </footer>

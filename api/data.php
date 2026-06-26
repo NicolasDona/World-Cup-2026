@@ -22,18 +22,26 @@ require __DIR__ . '/config.php';
 // Pendant la Coupe du Monde, les actualités doivent bouger vite.
 // Le front interroge déjà ce proxy toutes les 60 secondes.
 const DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS = 60;
+const DASHBOARD_PAYLOAD_STALE_TTL_SECONDS = 21600;
+const CLIENT_CACHE_TTL_SECONDS = 45;
 const NEWS_CACHE_TTL_SECONDS = 120;
+const TEAMS_CACHE_TTL_SECONDS = 21600;
+const MATCHES_CACHE_TTL_SECONDS = 120;
+const STANDINGS_CACHE_TTL_SECONDS = 900;
 const RECENT_FINISHED_MATCH_WINDOW_SECONDS = 86400;
 const RECENT_FINISHED_MATCH_DETAILS_TTL_SECONDS = 600;
 const FINISHED_MATCH_DETAILS_TTL_SECONDS = 21600;
 const ESPN_SCOREBOARD_URL = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
+
+if (!defined('THESPORTSDB_V2_BASE')) {
+    define('THESPORTSDB_V2_BASE', 'https://www.thesportsdb.com/api/v2/json');
+}
 
 // ── En-têtes HTTP de la réponse ──────────────────────────────────────────────
 header('Content-Type: application/json; charset=utf-8');
 // Empêche les navigateurs d'interpréter le JSON comme autre chose
 header('X-Content-Type-Options: nosniff');
 // On gère le cache côté serveur, pas côté navigateur
-header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 
 // ── Création du dossier cache si nécessaire ──────────────────────────────────
@@ -55,15 +63,28 @@ function jsonResponse(array $payload, int $status = 200): never
     exit;
 }
 
+function setClientCacheHeaders(int $maxAge): void
+{
+    if ($maxAge <= 0) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        return;
+    }
+
+    header('Cache-Control: private, max-age=' . $maxAge . ', stale-while-revalidate=120');
+}
+
 define('DASHBOARD_PAYLOAD_CACHE_FILE', CACHE_DIR . '/dashboard_payload_v5.json');
 
-function readDashboardPayloadCache(): ?array
+function readDashboardPayloadCache(bool $allowStale = false): ?array
 {
     if (!is_file(DASHBOARD_PAYLOAD_CACHE_FILE)) {
         return null;
     }
 
-    if (time() - filemtime(DASHBOARD_PAYLOAD_CACHE_FILE) > DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS) {
+    $age = time() - filemtime(DASHBOARD_PAYLOAD_CACHE_FILE);
+    $ttl = $allowStale ? DASHBOARD_PAYLOAD_STALE_TTL_SECONDS : DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS;
+    if ($age > $ttl) {
         return null;
     }
 
@@ -86,6 +107,16 @@ function readDashboardPayloadCache(): ?array
             return null;
         }
     }
+
+    $isStale = $age > DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS;
+    $payload['cache'] = [
+        'source' => 'dashboard',
+        'stale' => $isStale,
+        'ageSeconds' => $age,
+        'freshTtlSeconds' => DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS,
+        'staleTtlSeconds' => DASHBOARD_PAYLOAD_STALE_TTL_SECONDS,
+    ];
+    $payload['stale'] = $isStale;
 
     return $payload;
 }
@@ -417,18 +448,40 @@ function fetchNews(string $scope = 'global'): array
 // @param string $path  Chemin relatif, ex: '/competitions/WC/teams'
 // @return array        ['ok' => bool, 'cached' => bool, 'data' => array|null, 'status' => int|null]
 // ─────────────────────────────────────────────────────────────────────────────
-function footballDataGet(string $path, bool $bypassCache = false): array
+function footballDataCacheTtl(string $path): int
+{
+    if (str_ends_with($path, '/teams')) {
+        return TEAMS_CACHE_TTL_SECONDS;
+    }
+
+    if (str_ends_with($path, '/standings')) {
+        return STANDINGS_CACHE_TTL_SECONDS;
+    }
+
+    return MATCHES_CACHE_TTL_SECONDS;
+}
+
+function footballDataGet(string $path, bool $bypassCache = false, bool $allowStale = false): array
 {
     // Nom de fichier cache dérivé du chemin (ex: _competitions_WC_teams.json)
     $cacheKey  = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $path);
     $cacheFile = CACHE_DIR . '/' . $cacheKey . '.json';
 
-    // Retour du cache si encore valide selon CACHE_TTL_SECONDS
-    if (!$bypassCache && is_file($cacheFile) && (time() - filemtime($cacheFile) < CACHE_TTL_SECONDS)) {
+    $cacheTtl = footballDataCacheTtl($path);
+
+    // Retour du cache si encore valide selon le type de donnee.
+    if (!$bypassCache && is_file($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
         $raw     = file_get_contents($cacheFile);
         $decoded = json_decode((string) $raw, true);
         if (is_array($decoded)) {
-            return ['ok' => true, 'cached' => true, 'data' => $decoded];
+            return ['ok' => true, 'cached' => true, 'stale' => false, 'data' => $decoded];
+        }
+    }
+
+    if (!$bypassCache && $allowStale && is_file($cacheFile)) {
+        $fallback = json_decode((string) file_get_contents($cacheFile), true);
+        if (is_array($fallback)) {
+            return ['ok' => true, 'cached' => true, 'stale' => true, 'data' => $fallback];
         }
     }
 
@@ -453,20 +506,20 @@ function footballDataGet(string $path, bool $bypassCache = false): array
         if (is_file($cacheFile)) {
             $fallback = json_decode((string) file_get_contents($cacheFile), true);
             if (is_array($fallback)) {
-                return ['ok' => true, 'cached' => true, 'data' => $fallback];
+                return ['ok' => true, 'cached' => true, 'stale' => true, 'data' => $fallback];
             }
         }
-        return ['ok' => false, 'cached' => false, 'status' => $status];
+        return ['ok' => false, 'cached' => false, 'stale' => false, 'status' => $status];
     }
 
     $decoded = json_decode((string) $body, true);
     if (!is_array($decoded)) {
-        return ['ok' => false, 'cached' => false];
+        return ['ok' => false, 'cached' => false, 'stale' => false];
     }
 
     // Mise en cache de la réponse fraîche
     @file_put_contents($cacheFile, json_encode($decoded));
-    return ['ok' => true, 'cached' => false, 'data' => $decoded];
+    return ['ok' => true, 'cached' => false, 'stale' => false, 'data' => $decoded];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -708,6 +761,11 @@ function playerLastNameKey(string $player): string
 
 function cardDedupeKey(array $card): string
 {
+    $explicitKey = trim((string) ($card['_key'] ?? ''));
+    if ($explicitKey !== '') {
+        return $explicitKey;
+    }
+
     $type = strtolower((string) ($card['type'] ?? 'yellow'));
     $minute = is_numeric($card['minute'] ?? null) ? (string) ((int) $card['minute']) : 'na';
     $side = strtolower((string) ($card['teamSide'] ?? ''));
@@ -826,7 +884,7 @@ function rememberEventDetailsForMatch(array $match, array $details): void
 function isMatchInsideLiveWindow(array $match): bool
 {
     $status = (string) ($match['status'] ?? '');
-    if (in_array($status, ['IN_PLAY', 'PAUSED'], true)) {
+    if (in_array($status, ['IN_PLAY', 'PAUSED', 'LIVE'], true)) {
         return true;
     }
 
@@ -863,9 +921,164 @@ function shouldAcceptSportsDbEvent(array $event, array $match): bool
         return true;
     }
 
+    if (isMatchInsideLiveWindow($match)) {
+        return true;
+    }
+
     return sameScoreAsMatch($event, $match);
 }
 
+function sportsDbAssistName(array $item): string
+{
+    foreach (['strAssist', 'strAssist1', 'strAssist2', 'strPlayerAssist', 'strAssistPlayer'] as $field) {
+        $value = trim((string) ($item[$field] ?? ''));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+
+    return '';
+}
+
+function sportsDbV2JsonGet(string $path, int $timeout = 5): array
+{
+    if (THESPORTSDB_API_KEY === '') {
+        return [];
+    }
+
+    $url = rtrim(THESPORTSDB_V2_BASE, '/') . '/' . ltrim($path, '/');
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_HTTPHEADER     => [
+            'Accept: application/json',
+            'User-Agent: WorldCupDashboard/1.0',
+            'X-API-KEY: ' . THESPORTSDB_API_KEY,
+        ],
+    ]);
+
+    $body = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($body === false || $status >= 400) {
+        return [];
+    }
+
+    $decoded = json_decode((string) $body, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function parseSportsDbTimeline(array $timeline, string $source = 'TheSportsDB'): array
+{
+    $goals = [];
+    $cards = [];
+
+    foreach ($timeline as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+
+        $type = strtolower((string) ($item['strTimeline'] ?? ''));
+        $detail = strtolower((string) ($item['strTimelineDetail'] ?? ''));
+        $player = trim((string) ($item['strPlayer'] ?? ''));
+
+        if (str_contains($type, 'goal') && $player !== '') {
+            $goals[] = [
+                'teamSide' => (($item['strHome'] ?? '') === 'Yes') ? 'home' : 'away',
+                'team'     => $item['strTeam'] ?? '',
+                'player'   => $player,
+                'minute'   => is_numeric($item['intTime'] ?? null) ? (int) $item['intTime'] : null,
+                'assist'   => sportsDbAssistName($item),
+                'detail'   => $item['strTimelineDetail'] ?? 'Goal',
+                'source'   => $source,
+            ];
+        }
+
+        if ((str_contains($type, 'card') || str_contains($detail, 'card')) && $player !== '') {
+            $cardType = str_contains($type . ' ' . $detail, 'red') ? 'red' : 'yellow';
+            $cards[] = [
+                'type'     => $cardType,
+                'teamSide' => (($item['strHome'] ?? '') === 'Yes') ? 'home' : 'away',
+                'team'     => $item['strTeam'] ?? '',
+                'player'   => $player,
+                'minute'   => is_numeric($item['intTime'] ?? null) ? (int) $item['intTime'] : null,
+                'detail'   => $item['strTimelineDetail'] ?? ($cardType === 'red' ? 'Red Card' : 'Yellow Card'),
+                'source'   => $source,
+            ];
+        }
+    }
+
+    return ['goals' => $goals, 'cards' => $cards];
+}
+
+function sportsDbV2CardStatPlaceholders(string $eventId, array $knownCards): array
+{
+    $statsData = sportsDbV2JsonGet('lookup/event_stats/' . rawurlencode($eventId));
+    $stats = is_array($statsData['lookup'] ?? null) ? $statsData['lookup'] : [];
+    if (empty($stats)) {
+        return [];
+    }
+
+    $counts = [
+        'home' => ['yellow' => 0, 'red' => 0],
+        'away' => ['yellow' => 0, 'red' => 0],
+    ];
+
+    foreach ($stats as $stat) {
+        if (!is_array($stat)) {
+            continue;
+        }
+
+        $name = strtolower((string) ($stat['strStat'] ?? ''));
+        $type = str_contains($name, 'red card') ? 'red' : (str_contains($name, 'yellow card') ? 'yellow' : '');
+        if ($type === '') {
+            continue;
+        }
+
+        $counts['home'][$type] = max(0, (int) ($stat['intHome'] ?? 0));
+        $counts['away'][$type] = max(0, (int) ($stat['intAway'] ?? 0));
+    }
+
+    $known = [
+        'home' => ['yellow' => 0, 'red' => 0],
+        'away' => ['yellow' => 0, 'red' => 0],
+    ];
+
+    foreach ($knownCards as $card) {
+        if (!is_array($card)) {
+            continue;
+        }
+
+        $side = strtolower((string) ($card['teamSide'] ?? ''));
+        $type = strtolower((string) ($card['type'] ?? 'yellow')) === 'red' ? 'red' : 'yellow';
+        if (isset($known[$side][$type])) {
+            $known[$side][$type]++;
+        }
+    }
+
+    $cards = [];
+    foreach (['home', 'away'] as $side) {
+        foreach (['yellow', 'red'] as $type) {
+            $missing = max(0, $counts[$side][$type] - $known[$side][$type]);
+            for ($index = 1; $index <= $missing; $index++) {
+                $cards[] = [
+                    '_key'     => 'sportsdb-v2-stat|' . $eventId . '|' . $side . '|' . $type . '|' . $index,
+                    'type'     => $type,
+                    'teamSide' => $side,
+                    'team'     => '',
+                    'player'   => 'Joueur non précisé',
+                    'minute'   => null,
+                    'detail'   => $type === 'red' ? 'Red Card' : 'Yellow Card',
+                    'source'   => 'TheSportsDB v2 stats',
+                ];
+            }
+        }
+    }
+
+    return $cards;
+}
 function findSportsDbEvent(array $match): array
 {
     $date = isset($match['utcDate']) ? substr((string) $match['utcDate'], 0, 10) : '';
@@ -949,11 +1162,11 @@ function sportsDbHighlightsForEvent(array $event, array $match): array
 
 function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): array
 {
-    if (!in_array((string) ($match['status'] ?? ''), ['FINISHED', 'IN_PLAY', 'PAUSED'], true) && !isMatchInsideLiveWindow($match)) return [];
+    if (!in_array((string) ($match['status'] ?? ''), ['FINISHED', 'IN_PLAY', 'PAUSED', 'LIVE'], true) && !isMatchInsideLiveWindow($match)) return [];
 
     $expectedGoals = matchScoreTotal($match);
     $isFinished = ((string) ($match['status'] ?? '')) === 'FINISHED';
-    $isLiveData = !$isFinished && isMatchInsideLiveWindow($match);
+    $isLiveData = !$isFinished && (in_array((string) ($match['status'] ?? ''), ['IN_PLAY', 'PAUSED', 'LIVE'], true) || isMatchInsideLiveWindow($match));
 
     $matchId = (string) ($match['id'] ?? md5(json_encode($match)));
     $cacheKey = substr(hash('sha256', THESPORTSDB_API_KEY), 0, 8);
@@ -965,14 +1178,6 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         ? ($isRecentlyFinished ? RECENT_FINISHED_MATCH_DETAILS_TTL_SECONDS : FINISHED_MATCH_DETAILS_TTL_SECONDS)
         : 0;
     $snapshot = cachedEventDetailsForMatch($match);
-    $espnDetails = null;
-    $getEspnDetails = static function () use (&$espnDetails, $match): array {
-        if ($espnDetails === null) {
-            $espnDetails = espnDetailsForMatch($match);
-        }
-        return is_array($espnDetails) ? $espnDetails : ['scorers' => [], 'cards' => [], 'highlights' => []];
-    };
-
     if (!$isLiveData && is_file($cacheFile) && (time() - filemtime($cacheFile) < $cacheTtl)) {
         $cached = json_decode((string) file_get_contents($cacheFile), true);
         if (is_array($cached)) {
@@ -981,14 +1186,11 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
             if ($isFinished && !$hasCompleteCachedScorers) {
                 @unlink($cacheFile);
             } else {
-            $espn = [];
             if (empty($cached['scorers']) && matchScoreTotal($match) > 0) {
-                $espn = $getEspnDetails();
-                $cached['scorers'] = $espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match));
+                $cached['scorers'] = $snapshot['scorers'] ?: legacyCachedScorersForMatch($match);
             }
             if (empty($cached['cards'])) {
-                $espn = $espn ?: $getEspnDetails();
-                $cached['cards'] = $espn['cards'] ?: $snapshot['cards'];
+                $cached['cards'] = $snapshot['cards'];
             }
             if (empty($cached['highlights'])) {
                 $cached['highlights'] = $snapshot['highlights'];
@@ -1001,10 +1203,9 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
 
     $event = findSportsDbEvent($match);
     if (!$event || empty($event['idEvent'])) {
-        $espn = $getEspnDetails();
         $empty = [
-            'scorers' => $espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)),
-            'cards' => mergeCardEvents($espn['cards'] ?? [], $snapshot['cards']),
+            'scorers' => $snapshot['scorers'] ?: legacyCachedScorersForMatch($match),
+            'cards' => $snapshot['cards'],
             'highlights' => $snapshot['highlights'],
             'liveScore' => null,
             'liveStatus' => '',
@@ -1030,52 +1231,24 @@ function sportsDbDetailsForMatch(array $match, bool $bypassLiveCache = false): a
         }
     }
 
-    $timelineUrl = THESPORTSDB_BASE . '/' . rawurlencode(THESPORTSDB_API_KEY)
-                 . '/lookuptimeline.php?id=' . rawurlencode((string) $event['idEvent']);
-    $timelineData = externalJsonGet($timelineUrl);
-    $timeline = is_array($timelineData['timeline'] ?? null) ? $timelineData['timeline'] : [];
-    $goals = [];
-    $cards = [];
+    $eventId = (string) $event['idEvent'];
+    $timelineData = sportsDbV2JsonGet('lookup/event_timeline/' . rawurlencode($eventId));
+    $timeline = is_array($timelineData['lookup'] ?? null) ? $timelineData['lookup'] : [];
+    $parsedTimeline = parseSportsDbTimeline($timeline, 'TheSportsDB v2');
 
-    foreach ($timeline as $item) {
-        $type = strtolower((string) ($item['strTimeline'] ?? ''));
-        $detail = strtolower((string) ($item['strTimelineDetail'] ?? ''));
-        $player = trim((string) ($item['strPlayer'] ?? ''));
-
-        if (str_contains($type, 'goal') && $player !== '') {
-            $goals[] = [
-                'teamSide' => (($item['strHome'] ?? '') === 'Yes') ? 'home' : 'away',
-                'team'     => $item['strTeam'] ?? '',
-                'player'   => $player,
-                'minute'   => is_numeric($item['intTime'] ?? null) ? (int) $item['intTime'] : null,
-                'assist'   => trim((string) ($item['strAssist'] ?? '')),
-                'detail'   => $item['strTimelineDetail'] ?? 'Goal',
-                'source'   => 'TheSportsDB',
-            ];
-        }
-
-        if ((str_contains($type, 'card') || str_contains($detail, 'card')) && $player !== '') {
-            $cardType = str_contains($type . ' ' . $detail, 'red') ? 'red' : 'yellow';
-            $cards[] = [
-                'type'     => $cardType,
-                'teamSide' => (($item['strHome'] ?? '') === 'Yes') ? 'home' : 'away',
-                'team'     => $item['strTeam'] ?? '',
-                'player'   => $player,
-                'minute'   => is_numeric($item['intTime'] ?? null) ? (int) $item['intTime'] : null,
-                'detail'   => $item['strTimelineDetail'] ?? ($cardType === 'red' ? 'Red Card' : 'Yellow Card'),
-                'source'   => 'TheSportsDB',
-            ];
-        }
+    if (empty($parsedTimeline['goals']) && empty($parsedTimeline['cards'])) {
+        $timelineUrl = THESPORTSDB_BASE . '/' . rawurlencode(THESPORTSDB_API_KEY)
+                     . '/lookuptimeline.php?id=' . rawurlencode($eventId);
+        $timelineData = externalJsonGet($timelineUrl);
+        $timeline = is_array($timelineData['timeline'] ?? null) ? $timelineData['timeline'] : [];
+        $parsedTimeline = parseSportsDbTimeline($timeline, 'TheSportsDB');
     }
 
-    $espn = [];
-    if ((count($goals) !== $expectedGoals && $expectedGoals > 0) || $isLiveData || empty($cards)) {
-        $espn = $getEspnDetails();
-    }
-    $completeGoals = count($goals) === $expectedGoals ? $goals : ($espn['scorers'] ?: ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match)));
-    $completeCards = !empty($cards)
-        ? mergeCardEvents($cards)
-        : mergeCardEvents($espn['cards'] ?? [], $snapshot['cards']);
+    $goals = $parsedTimeline['goals'];
+    $cards = mergeCardEvents($parsedTimeline['cards'], sportsDbV2CardStatPlaceholders($eventId, $parsedTimeline['cards']));
+
+    $completeGoals = !empty($goals) ? $goals : ($snapshot['scorers'] ?: legacyCachedScorersForMatch($match));
+    $completeCards = mergeCardEvents($cards, $snapshot['cards']);
     $details = [
         'scorers'    => $completeGoals,
         'cards'      => $completeCards,
@@ -1114,9 +1287,197 @@ function enrichMatchesWithDetails(array $matches, bool $bypassLiveCache = false)
     }, $matches);
 }
 
+function manualEventsStoreFile(): string
+{
+    return rtrim(CACHE_DIR, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'worldcup_manual_events.json';
+}
+
+function isBadCollectorPlayer(string $player): bool
+{
+    $normalized = strtolower(trim($player));
+    if ($normalized === '') {
+        return true;
+    }
+
+    $bad = [
+        'sa surface',
+        'surface',
+        'le long',
+        'ligne de touche',
+        'carton jaune',
+        'carton rouge',
+        'equateur',
+        'allemagne',
+    ];
+
+    foreach ($bad as $needle) {
+        if ($normalized === $needle || str_contains($normalized, $needle)) {
+            return true;
+        }
+    }
+
+    return !preg_match('/[A-ZÀ-Ý]/u', $player);
+}
+function manualEventDedupeKey(array $event): string
+{
+    $minute = is_numeric($event['minute'] ?? null) ? (string) ((int) $event['minute']) : 'na';
+    $kind = strtolower((string) ($event['kind'] ?? ''));
+    $type = strtolower((string) ($event['type'] ?? ''));
+    $side = strtolower((string) ($event['teamSide'] ?? ''));
+    $player = playerLastNameKey((string) ($event['player'] ?? ''));
+
+    return implode('|', [$minute, $kind, $type, $side, $player]);
+}
+
+function loadManualEventsByMatch(): array
+{
+    $file = manualEventsStoreFile();
+    if (!is_file($file)) {
+        return [];
+    }
+
+    $decoded = json_decode((string) file_get_contents($file), true);
+    $events = is_array($decoded['events'] ?? null) ? $decoded['events'] : [];
+    $byMatch = [];
+    foreach ($events as $event) {
+        if (!is_array($event)) {
+            continue;
+        }
+
+        $matchId = (string) ($event['matchId'] ?? '');
+        if ($matchId === '') {
+            continue;
+        }
+
+        $byMatch[$matchId][] = $event;
+    }
+
+    return $byMatch;
+}
+
+function applyManualMatchEvents(array $matches): array
+{
+    $manualByMatch = loadManualEventsByMatch();
+    if ($manualByMatch === []) {
+        return $matches;
+    }
+
+    return array_map(static function (array $match) use ($manualByMatch): array {
+        $matchId = (string) ($match['id'] ?? '');
+        $events = $manualByMatch[$matchId] ?? [];
+        if ($events === []) {
+            return $match;
+        }
+
+        $manualGoals = [];
+        $manualCards = [];
+        foreach ($events as $event) {
+            $kind = strtolower((string) ($event['kind'] ?? ''));
+            if (isBadCollectorPlayer((string) ($event['player'] ?? ''))) {
+                continue;
+            }
+
+            if ($kind === 'goal') {
+                $manualGoals[] = [
+                    'teamSide' => $event['teamSide'] ?? '',
+                    'team'     => $event['team'] ?? '',
+                    'player'   => $event['player'] ?? '',
+                    'minute'   => is_numeric($event['minute'] ?? null) ? (int) $event['minute'] : null,
+                    'assist'   => $event['assist'] ?? '',
+                    'detail'   => $event['detail'] ?? 'Goal',
+                    'source'   => $event['source'] ?? 'Collecteur live',
+                ];
+            }
+            if ($kind === 'card') {
+                $manualCards[] = [
+                    'type'     => strtolower((string) ($event['type'] ?? 'yellow')) === 'red' ? 'red' : 'yellow',
+                    'teamSide' => $event['teamSide'] ?? '',
+                    'team'     => $event['team'] ?? '',
+                    'player'   => $event['player'] ?? '',
+                    'minute'   => is_numeric($event['minute'] ?? null) ? (int) $event['minute'] : null,
+                    'detail'   => $event['detail'] ?? 'Yellow Card',
+                    'source'   => $event['source'] ?? 'Collecteur live',
+                ];
+            }
+        }
+
+        if ($manualGoals !== []) {
+            $goals = [];
+            $seen = [];
+            foreach ([$manualGoals, is_array($match['scorers'] ?? null) ? $match['scorers'] : []] as $list) {
+                foreach ($list as $goal) {
+                    if (!is_array($goal)) {
+                        continue;
+                    }
+                    $key = manualEventDedupeKey(['kind' => 'goal'] + $goal);
+                    if (isset($seen[$key])) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $goals[] = $goal;
+                }
+            }
+            usort($goals, static fn (array $a, array $b): int => eventMinuteValue($a) <=> eventMinuteValue($b));
+            $match['scorers'] = $goals;
+        }
+
+        if ($manualCards !== []) {
+            $match['cards'] = mergeCardEvents($manualCards, is_array($match['cards'] ?? null) ? $match['cards'] : []);
+        }
+
+        return $match;
+    }, $matches);
+}
 function applyKnownMatchCorrections(array $matches): array
 {
     return array_map(static function (array $match): array {
+        if ((string) ($match['id'] ?? '') === '537355') {
+            $verifiedCards = [
+                [
+                    'type'     => 'yellow',
+                    'teamSide' => 'home',
+                    'team'     => 'Ecuador',
+                    'player'   => 'P. Hincapié',
+                    'minute'   => 43,
+                    'detail'   => 'Yellow Card',
+                    'source'   => 'Eurosport FR',
+                ],
+                [
+                    'type'     => 'yellow',
+                    'teamSide' => 'away',
+                    'team'     => 'Germany',
+                    'player'   => 'A. Pavlovic',
+                    'minute'   => 44,
+                    'detail'   => 'Yellow Card',
+                    'source'   => 'Eurosport FR',
+                ],
+            ];
+            $apiCards = is_array($match['cards'] ?? null) ? $match['cards'] : [];
+            $verifiedCounts = [];
+            foreach ($verifiedCards as $card) {
+                $key = strtolower((string) ($card['teamSide'] ?? '')) . '|' . strtolower((string) ($card['type'] ?? 'yellow'));
+                $verifiedCounts[$key] = ($verifiedCounts[$key] ?? 0) + 1;
+            }
+            $extraApiCards = [];
+            foreach ($apiCards as $card) {
+                if (!is_array($card)) {
+                    continue;
+                }
+
+                $key = strtolower((string) ($card['teamSide'] ?? '')) . '|' . strtolower((string) ($card['type'] ?? 'yellow'));
+                $player = trim((string) ($card['player'] ?? ''));
+                $isPlaceholder = $player === '' || strcasecmp($player, 'Joueur non précisé') === 0;
+                if ($isPlaceholder && ($verifiedCounts[$key] ?? 0) > 0) {
+                    $verifiedCounts[$key]--;
+                    continue;
+                }
+
+                $extraApiCards[] = $card;
+            }
+            $match['cards'] = mergeCardEvents($verifiedCards, $extraApiCards);
+            return $match;
+        }
+
         if ((string) ($match['id'] ?? '') !== '537371') {
             return $match;
         }
@@ -1291,17 +1652,20 @@ function compactNewsArticle(array $article): array
 
 $forceRefresh = (string) ($_GET['refresh'] ?? '') === '1';
 $liveRefresh = (string) ($_GET['live'] ?? '') === '1';
+$revalidate = (string) ($_GET['revalidate'] ?? '') === '1';
 
-if (!$forceRefresh && !$liveRefresh) {
-    $cachedPayload = readDashboardPayloadCache();
+if (!$forceRefresh && !$liveRefresh && !$revalidate) {
+    $cachedPayload = readDashboardPayloadCache(true);
     if ($cachedPayload !== null) {
+        setClientCacheHeaders(($cachedPayload['stale'] ?? false) ? 15 : CLIENT_CACHE_TTL_SECONDS);
         jsonResponse($cachedPayload);
     }
 }
 
-$teams     = footballDataGet('/competitions/' . COMPETITION_CODE . '/teams', $forceRefresh && !$liveRefresh);
-$matches   = footballDataGet('/competitions/' . COMPETITION_CODE . '/matches', $forceRefresh || $liveRefresh);
-$standings = footballDataGet('/competitions/' . COMPETITION_CODE . '/standings', $forceRefresh && !$liveRefresh);
+$allowEndpointStale = !$forceRefresh && !$liveRefresh && !$revalidate;
+$teams     = footballDataGet('/competitions/' . COMPETITION_CODE . '/teams', $forceRefresh && !$liveRefresh, $allowEndpointStale);
+$matches   = footballDataGet('/competitions/' . COMPETITION_CODE . '/matches', $forceRefresh || $liveRefresh, $allowEndpointStale);
+$standings = footballDataGet('/competitions/' . COMPETITION_CODE . '/standings', $forceRefresh && !$liveRefresh, $allowEndpointStale);
 
 // Erreur fatale uniquement si les 3 appels ont échoué ET qu'il n'y a aucun cache
 $hasHardError = !$teams['ok'] && !$matches['ok'] && !$standings['ok']
@@ -1317,10 +1681,14 @@ if ($hasHardError) {
 $matchList = is_array($matches['data']['matches'] ?? null) ? $matches['data']['matches'] : [];
 $matchList = enrichMatchesWithDetails($matchList, $liveRefresh);
 $matchList = applyKnownMatchCorrections($matchList);
+$matchList = applyManualMatchEvents($matchList);
 $teamList = is_array($teams['data']['teams'] ?? null) ? $teams['data']['teams'] : [];
 $standingList = is_array($standings['data']['standings'] ?? null) ? $standings['data']['standings'] : [];
 $newsList = fetchNews('global');
 $watchedNewsList = fetchNews('watched');
+$servedStaleEndpoint = (bool) ($teams['stale'] ?? false)
+    || (bool) ($matches['stale'] ?? false)
+    || (bool) ($standings['stale'] ?? false);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RÉPONSE FINALE
@@ -1329,9 +1697,16 @@ $watchedNewsList = fetchNews('watched');
 $payload = [
     'ok'              => true,
     'generatedAt'     => gmdate('c'),       // Timestamp de génération (ISO 8601 UTC)
-    'cacheTtlSeconds' => $liveRefresh ? 0 : CACHE_TTL_SECONDS,
+    'cacheTtlSeconds' => $liveRefresh ? 0 : MATCHES_CACHE_TTL_SECONDS,
     'liveNoCache'     => $liveRefresh,
     'newsCacheTtlSeconds' => NEWS_CACHE_TTL_SECONDS,
+    'stale'           => $servedStaleEndpoint,
+    'cache'           => [
+        'source' => $servedStaleEndpoint ? 'endpoint' : 'fresh',
+        'stale' => $servedStaleEndpoint,
+        'freshTtlSeconds' => DASHBOARD_PAYLOAD_CACHE_TTL_SECONDS,
+        'staleTtlSeconds' => DASHBOARD_PAYLOAD_STALE_TTL_SECONDS,
+    ],
     'teams'           => array_map('compactTeam', $teamList),
     'matches'         => array_map('compactMatch', $matchList),
     'standings'       => array_map('compactStanding', $standingList),
@@ -1339,7 +1714,8 @@ $payload = [
     'watchedNews'     => array_map('compactNewsArticle', $watchedNewsList),
 ];
 
-if (!$liveRefresh) {
+if (!$liveRefresh && !$servedStaleEndpoint) {
     writeDashboardPayloadCache($payload);
 }
+setClientCacheHeaders(($forceRefresh || $liveRefresh || $revalidate) ? 0 : CLIENT_CACHE_TTL_SECONDS);
 jsonResponse($payload);

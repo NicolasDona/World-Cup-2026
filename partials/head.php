@@ -100,7 +100,7 @@ $showPsyomReturnHome = in_array($host, ['psyom.eu', 'www.psyom.eu'], true);
   </style>
   <?php endif; ?>
 </head>
-<body>
+<body class="is-data-loading">
   <?php if ($showPsyomReturnHome): ?>
   <a class="psyom-return-home" href="https://psyom.eu/" rel="home">Retour</a>
   <?php endif; ?>
