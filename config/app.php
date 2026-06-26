@@ -7,8 +7,8 @@ if (!defined('WORLD_CUP_APP')) {
 }
 
 $assetVersions = [
-    'css' => 127,
-    'js'  => 159,
+    'css' => 136,
+    'js'  => 182,
 ];
 
 return [

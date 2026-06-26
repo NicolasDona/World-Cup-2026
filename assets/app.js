@@ -126,11 +126,14 @@ const els = {
   watchList:      document.querySelector('#watchList'),
   nextMatch:      document.querySelector('#nextMatch'),
   watchedNextMatch: document.querySelector('#watchedNextMatch'),
+  watchedNextTitle: document.querySelector('#watchedNextTitle'),
+  watchedNextContext: document.querySelector('#watchedNextContext'),
   liveMatchTitle: document.querySelector('#liveMatchTitle'),
   liveMatch:      document.querySelector('#liveMatch'),
   todayResults:   document.querySelector('#todayResults'),
   todayResultsHint: document.querySelector('#todayResultsHint'),
   tournamentStats: document.querySelector('#tournamentStats'),
+  efficiencyMode: document.querySelector('#efficiencyMode'),
   topScorers:     document.querySelector('#topScorers'),
   finalStageBracket: document.querySelector('#finalStageBracket'),
   quickNav:       document.querySelector('#quickNav'),
@@ -141,6 +144,7 @@ const els = {
   infoModalContent: document.querySelector('#infoModalContent'),
   matchModal:     document.querySelector('#matchModal'),
   matchModalContent: document.querySelector('#matchModalContent'),
+  initialLoading: document.querySelector('#initialLoading'),
   siteSearchForm: document.querySelector('#siteSearchForm'),
   siteSearch:     document.querySelector('#siteSearch'),
   matchSearch:    document.querySelector('#matchSearch'),
@@ -174,7 +178,31 @@ let watchedNextMatchUtc = null;
 let hasLoadedData = false;
 let liveRefreshInFlight = false;
 const PERF_STORAGE_KEY = 'worldcup2026:performance-mode';
+const EFFICIENCY_MODE_STORAGE_KEY = 'worldcup2026:efficiency-mode';
+const INITIAL_LOADING_TEXT = 'Les matchs, groupes, scores et actus arrivent. La page reste disponible pendant la recuperation.';
 let performanceMode = 'hard';
+let efficiencyMode = 'all';
+
+try {
+  const storedEfficiencyMode = localStorage.getItem(EFFICIENCY_MODE_STORAGE_KEY);
+  if (storedEfficiencyMode) efficiencyMode = storedEfficiencyMode;
+} catch (_) {
+  efficiencyMode = 'all';
+}
+
+function setInitialLoading(done, message = '') {
+  document.body.classList.toggle('is-data-loading', !done);
+  document.body.classList.toggle('is-data-ready', done);
+
+  if (!els.initialLoading) return;
+  els.initialLoading.classList.toggle('is-hidden', done);
+  els.initialLoading.classList.toggle('has-error', !done && Boolean(message));
+
+  const text = els.initialLoading.querySelector('p');
+  const retry = els.initialLoading.querySelector('[data-initial-refresh]');
+  if (text) text.textContent = message || INITIAL_LOADING_TEXT;
+  if (retry) retry.hidden = !message;
+}
 
 function applyPerformanceMode(mode) {
   performanceMode = mode === 'light' ? 'light' : 'hard';
@@ -642,6 +670,9 @@ function compactMatchLine(match) {
 
 function teamJourneyHtml(team = {}, matches = []) {
   const stats = teamJourneyStats(team, matches);
+  const nextMatchLine = stats.nextMatch
+    ? compactMatchLine(stats.nextMatch)
+    : (isEliminatedTeam(team) ? 'Aucun match prévu' : 'À confirmer');
   const standing = teamStandingRow(team);
   const standingPlayed = numericScore(standing?.playedGames);
   const useStandingStats = standingPlayed !== null && standingPlayed >= stats.played;
@@ -675,7 +706,7 @@ function teamJourneyHtml(team = {}, matches = []) {
       </article>
       <article>
         <small>Prochain match</small>
-        <strong>${escapeHtml(compactMatchLine(stats.nextMatch))}</strong>
+        <strong>${escapeHtml(nextMatchLine)}</strong>
       </article>
     </div>
   </div>`;
@@ -901,22 +932,32 @@ function openEfficiencyHelpModal() {
     <div class="info-sheet rating-help-sheet">
       <p class="eyebrow">Méthode</p>
       <h2 id="infoModalTitle">Comment est calculée la note?</h2>
-      <p>La note va de 0 à 100. Elle mesure la performance réelle d'une équipe sur ses matchs terminés ou en direct, puis affiche la moyenne.</p>
+      <p>La note va de 0 à 100. Elle mesure une performance sportive par match, puis affiche la moyenne de l'équipe.</p>
       <div class="rating-help-grid">
         <section>
-          <strong>45%</strong>
+          <strong>50%</strong>
           <span>Résultat</span>
-          <p>Victoire, nul ou défaite sont comparés au résultat attendu selon le classement FIFA des deux équipes.</p>
+          <p>Victoire, nul ou défaite restent le socle de la note. En Coupe du Monde, gagner compte d'abord.</p>
         </section>
         <section>
-          <strong>25%</strong>
-          <span>Attaque</span>
-          <p>Les buts marqués sont comparés à ce qu'on pouvait attendre face au niveau de l'adversaire.</p>
+          <strong>20%</strong>
+          <span>Adversité</span>
+          <p>Le niveau estimé de l'adversaire donne plus de poids aux bons résultats obtenus face aux grosses équipes.</p>
         </section>
         <section>
-          <strong>30%</strong>
+          <strong>15%</strong>
           <span>Écart</span>
-          <p>L'écart au score valorise les victoires nettes et pénalise les défaites lourdes.</p>
+          <p>La différence de buts est plafonnée à +3 / -3 pour éviter de surpayer une large victoire contre une équipe faible.</p>
+        </section>
+        <section>
+          <strong>10%</strong>
+          <span>Attaque</span>
+          <p>Les buts marqués ajoutent un bonus simple, plafonné pour rester secondaire par rapport au résultat.</p>
+        </section>
+        <section>
+          <strong>5%</strong>
+          <span>Clean sheet</span>
+          <p>Ne pas encaisser récompense la maîtrise défensive sur l'ensemble du match.</p>
         </section>
       </div>
       <p class="rating-help-note"><strong>Adversité</strong> indique la difficulté moyenne des adversaires rencontrés. Elle part du niveau estimé de l'adversaire, puis reste plafonnée pour éviter de transformer un duel moyen en exploit irréaliste.</p>
@@ -963,7 +1004,7 @@ function openStatsModal() {
   if (!els.infoModal || !els.infoModalContent) return;
   els.infoModal.classList.add('has-stats-sheet');
 
-  const efficiency = computeTournamentEfficiencyRanking();
+  const efficiency = filterEfficiencyRanking(computeTournamentEfficiencyRanking());
   const scorers = computeTopScorersRanking();
   const playerPerformances = computePlayerPerformanceRanking();
 
@@ -1112,12 +1153,12 @@ function isFinishedMatch(match = {}) {
 }
 
 function isLiveMatch(match = {}) {
-  return ['IN_PLAY', 'PAUSED'].includes(effectiveMatchStatus(match));
+  return ['IN_PLAY', 'PAUSED', 'LIVE'].includes(effectiveMatchStatus(match));
 }
 
 function matchStatus(match) {
   const s = effectiveMatchStatus(match);
-  if (s === 'IN_PLAY' || s === 'PAUSED') return ['En direct', 'live'];
+  if (s === 'IN_PLAY' || s === 'PAUSED' || s === 'LIVE') return ['En direct', 'live'];
   if (s === 'FINISHED')                  return ['Terminé',   'finished'];
   if (s === 'POSTPONED')                 return ['Reporté',   ''];
   return ['À venir', ''];
@@ -1197,6 +1238,11 @@ function cardDetailLabel(card = {}) {
   if (normalized.includes('red card') || normalized.includes('carton rouge')) return 'Carton rouge';
   if (normalized.includes('yellow card') || normalized.includes('carton jaune')) return 'Carton jaune';
   return detail;
+}
+
+function cardPlayerName(card = {}) {
+  const player = String(card.player || '').trim();
+  return player && norm(player) !== norm('Joueur non précisé') ? player : '';
 }
 
 function goalMainLabel(goal = {}) {
@@ -1379,25 +1425,50 @@ function liveEventsSummaryHtml(match) {
     </li>`;
   });
 
+  const missingGoalItems = missingGoalSummaries(match, scorers).map(([, team, count]) => {
+    const resolvedTeam = teamLookup(team);
+    const label = count > 1 ? `${count} buts confirmés` : 'But confirmé';
+
+    return `<li>
+      <span class="live-event-minute">${escapeHtml(count > 1 ? `${count}x` : 'But')}</span>
+      <span class="live-event-icon match-info-icon ball-icon" aria-hidden="true"></span>
+      <span class="live-event-body">
+        <strong>${escapeHtml(label)}</strong>
+        <small>${teamVisual(resolvedTeam)}${escapeHtml(resolvedTeam.name || resolvedTeam.shortName || 'Équipe')}</small>
+      </span>
+    </li>`;
+  });
+
   const cardItems = cards.slice(0, 3).map(card => {
     const cardMinute = Number(card.minute);
     const minute = Number.isFinite(cardMinute) ? `${cardMinute}'` : 'Carton';
     const cardClass = card.type === 'red' ? 'red' : 'yellow';
     const type = cardClass === 'red' ? 'rouge' : 'jaune';
+    const player = cardPlayerName(card);
+    const team = eventTeamName(match, card, 'Équipe');
 
     return `<li>
       <span class="live-event-minute">${escapeHtml(minute)}</span>
       <span class="live-event-icon match-info-icon card-icon ${cardClass}" aria-hidden="true"></span>
       <span class="live-event-body">
-        <strong>${escapeHtml(card.player || 'Joueur non précisé')}</strong>
-        <small>${eventTeamVisual(match, card)}Carton ${type}</small>
+        <strong>${escapeHtml(player || `Carton ${type} confirmé`)}</strong>
+        <small>${eventTeamVisual(match, card)}${escapeHtml(player ? `Carton ${type}` : team)}</small>
       </span>
     </li>`;
   });
 
+  const items = [...goalItems, ...cardItems];
+  if (!items.length && scoreGoals) {
+    return '';
+    return `<div class="live-match-feed is-muted">
+      <strong>Score live confirmé</strong>
+      <span>Détail des buteurs et cartons en attente de confirmation.</span>
+    </div>`;
+  }
+
   return `<div class="live-match-feed">
     <strong>Actions live</strong>
-    <ul>${[...goalItems, ...cardItems].join('')}</ul>
+    <ul>${items.join('')}</ul>
   </div>`;
 }
 
@@ -1409,7 +1480,8 @@ function cardsText(match) {
     .map(card => {
       const minute = Number.isFinite(card.minute) ? `${card.minute}' ` : '';
       const label = card.type === 'red' ? 'rouge' : 'jaune';
-      return `${minute}${card.player} (${label})`;
+      const player = cardPlayerName(card);
+      return player ? `${minute}${player} (${label})` : `${minute}Carton ${label} confirmé ${eventTeamName(match, card, '')}`.trim();
     })
     .join(' · ');
 }
@@ -1421,10 +1493,12 @@ function cardsHtml(match, className = 'match-cards') {
   const items = cards.map(card => {
     const minute = Number.isFinite(card.minute) ? `${card.minute}' ` : '';
     const type = card.type === 'red' ? 'red' : 'yellow';
+    const player = cardPlayerName(card);
+    const label = type === 'red' ? 'Carton rouge' : 'Carton jaune';
     return `<span class="card-event">
-      <span class="match-info-icon card-icon ${type}" aria-label="Carton ${type === 'red' ? 'rouge' : 'jaune'}"></span>
+      <span class="match-info-icon card-icon ${type}" aria-label="${label}"></span>
       ${eventTeamVisual(match, card)}
-      ${escapeHtml(`${minute}${card.player}`)}
+      ${escapeHtml(player ? `${minute}${player}` : `${minute}${label} confirmé`)}
     </span>`;
   }).join('');
 
@@ -1455,6 +1529,68 @@ function matchDomId(match = {}) {
 
 function findMatchByDomId(value) {
   return state.matches.find(match => matchDomId(match) === String(value || ''));
+}
+
+function archivedMatches() {
+  return state.matches
+    .filter(isFinishedMatch)
+    .sort((a, b) => new Date(b.utcDate || 0) - new Date(a.utcDate || 0));
+}
+
+function mainScheduleMatch(match) {
+  return isUpcomingMatch(match) || isLiveMatch(match);
+}
+
+function archiveMatchRowHtml(match) {
+  const home = teamLookup(match.homeTeam);
+  const away = teamLookup(match.awayTeam);
+  const meta = [matchMeta(match), match.venue].filter(Boolean).map(escapeHtml).join(' - ');
+  const timelineCount = matchTimelineEvents(match).length;
+  const signals = [
+    timelineCount ? `${timelineCount} action${timelineCount > 1 ? 's' : ''}` : '',
+    Array.isArray(match.scorers) && match.scorers.length ? `${match.scorers.length} buteur${match.scorers.length > 1 ? 's' : ''}` : '',
+    Array.isArray(match.cards) && match.cards.length ? `${match.cards.length} carton${match.cards.length > 1 ? 's' : ''}` : '',
+  ].filter(Boolean);
+
+  return `<article class="archive-match-row">
+    <div class="archive-match-date">${escapeHtml(fmtDate(match.utcDate))}</div>
+    <div class="archive-match-main">
+      <div class="archive-match-teams">
+        ${teamVisual(home)}<strong>${escapeHtml(home.name || home.shortName || 'Équipe')}</strong>
+        <span class="versus">vs</span>
+        ${teamVisual(away)}<strong>${escapeHtml(away.name || away.shortName || 'Équipe')}</strong>
+      </div>
+      <small>${meta || 'Coupe du Monde 2026'}</small>
+      ${signals.length ? `<div class="archive-match-signals">${signals.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+    </div>
+    <strong class="archive-match-score">${escapeHtml(scoreText(match))}</strong>
+    ${matchDetailButtonHtml(match, 'is-archive')}
+  </article>`;
+}
+
+function openMatchesArchiveModal() {
+  if (!els.matchModal || !els.matchModalContent) return;
+  const matches = archivedMatches();
+
+  els.matchModalContent.innerHTML = `
+    <div class="matches-archive-sheet">
+      <header class="premium-match-hero">
+        <p class="eyebrow">Archives</p>
+        <h2 id="matchModalTitle">Matchs terminés</h2>
+        <div class="premium-match-meta">
+          <span class="badge finished">${matches.length} match${matches.length > 1 ? 's' : ''}</span>
+          <span>Résultats déjà joués</span>
+        </div>
+      </header>
+      <div class="archive-match-list">
+        ${matches.length
+          ? matches.map(archiveMatchRowHtml).join('')
+          : '<div class="empty">Aucun match terminé pour le moment.</div>'}
+      </div>
+    </div>`;
+
+  els.matchModal.hidden = false;
+  document.body.classList.add('modal-open');
 }
 
 function premiumSignalsHtml(match, className = '') {
@@ -1696,17 +1832,17 @@ function matchEfficiencyRating(team, opponent, goalsFor, goalsAgainst) {
   const expected = expectedResultShare(teamRank, opponentRank);
   const actual = matchResultShare(goalsFor, goalsAgainst);
   const difference = goalsFor - goalsAgainst;
-  const attackExpectation = clamp(
-    1.15 + ((fifaRatingFromRank(teamRank) - fifaRatingFromRank(opponentRank)) / 65),
-    0.45,
-    2.15
-  );
-
-  const resultComponent = clamp(50 + ((actual - expected) * 50), 0, 100);
-  const attackComponent = clamp(50 + ((goalsFor - attackExpectation) * 14), 0, 100);
-  const marginComponent = clamp(50 + (difference * 10), 0, 100);
+  const difficulty = Math.min(clamp(100 - (expected * 55), 45, 100), adversaryDifficultyCap(opponentRank));
+  const resultComponent = actual * 100;
+  const marginComponent = clamp(50 + (clamp(difference, -3, 3) * 16), 0, 100);
+  const attackComponent = clamp(goalsFor * 25, 0, 100);
+  const cleanSheetComponent = goalsAgainst === 0 ? 100 : 0;
   const note = clamp(
-    (resultComponent * 0.45) + (attackComponent * 0.25) + (marginComponent * 0.30),
+    (resultComponent * 0.50) +
+    (difficulty * 0.20) +
+    (marginComponent * 0.15) +
+    (attackComponent * 0.10) +
+    (cleanSheetComponent * 0.05),
     0,
     100
   );
@@ -1714,7 +1850,7 @@ function matchEfficiencyRating(team, opponent, goalsFor, goalsAgainst) {
   return {
     note,
     expected,
-    difficulty: Math.min(clamp(100 - (expected * 55), 45, 100), adversaryDifficultyCap(opponentRank)),
+    difficulty,
   };
 }
 
@@ -1771,11 +1907,36 @@ function compactMatchCard(match, variant = '') {
  * Un groupe est complet quand chaque équipe a joué contre toutes les autres.
  * (n équipes = n-1 matchs chacune)
  */
+function finishedGroupGamesByTeam(group) {
+  const counts = new Map();
+  state.matches
+    .filter(match => match.stage === 'GROUP_STAGE')
+    .filter(match => groupLetter(match.group || '') === group)
+    .filter(isFinishedMatch)
+    .forEach(match => {
+      [match.homeTeam, match.awayTeam].forEach(team => {
+        const key = String(teamKey(team) || '');
+        if (key) counts.set(key, Number(counts.get(key) || 0) + 1);
+      });
+    });
+
+  return counts;
+}
+
 function groupIsComplete(group) {
   const table = group.table || [];
   if (!table.length) return false;
   const expectedGames = table.length - 1;
-  return table.every(row => Number(row.playedGames || 0) >= expectedGames);
+  if (table.every(row => Number(row.playedGames || 0) >= expectedGames)) return true;
+
+  const groupCode = groupLetter(group.group || group.stage || '');
+  if (!groupCode) return false;
+
+  const playedByTeam = finishedGroupGamesByTeam(groupCode);
+  return table.every(row => {
+    const key = String(teamKey(row.team) || '');
+    return key && Number(playedByTeam.get(key) || 0) >= expectedGames;
+  });
 }
 
 /**
@@ -1956,7 +2117,12 @@ function updateNextCountdown() {
   if (countdown) countdown.textContent = countdownText(nextMatchUtc);
 
   const watchedCountdown = document.querySelector('#watchedNextCountdown');
-  if (watchedCountdown) watchedCountdown.textContent = countdownText(watchedNextMatchUtc);
+  if (watchedCountdown) {
+    const liveWatchedMatch = getLiveWatchedMatch();
+    watchedCountdown.textContent = liveWatchedMatch
+      ? liveScoreText(liveWatchedMatch)
+      : countdownText(watchedNextMatchUtc);
+  }
 
   const liveCountdown = document.querySelector('#liveMatchCountdown');
   const liveMatch = getLiveMatch();
@@ -2092,6 +2258,8 @@ function renderWatchedNextMatch() {
   const metaParts = [matchMeta(match), match.venue].filter(Boolean).map(escapeHtml);
   const isLive = Boolean(liveMatch);
   const discipline = disciplineSummary(match);
+  if (els.watchedNextTitle) els.watchedNextTitle.textContent = isLive ? 'Match en direct' : 'Prochain rendez-vous';
+  if (els.watchedNextContext) els.watchedNextContext.textContent = isLive ? liveClockText(match) : 'France · Congo · Portugal';
 
   els.watchedNextMatch.innerHTML = `
     <article class="watched-next-card ${isLive ? 'is-live' : ''}">
@@ -2272,6 +2440,55 @@ function statsMoreButton(hiddenCount) {
     <button class="stats-more" type="button" data-stats-modal>
       Voir toutes les stats <span>+${hiddenCount}</span>
     </button>`;
+}
+
+function efficiencyModeOptions(ranking = []) {
+  const counts = [...new Set(ranking.map(row => Number(row.played || 0)).filter(Boolean))]
+    .sort((a, b) => b - a);
+
+  return [
+    { value: 'all', label: 'Général' },
+    ...(counts.length ? [{ value: 'max', label: 'Max matchs joués' }] : []),
+    ...counts.map(count => ({
+      value: `played:${count}`,
+      label: `${count} match${count > 1 ? 's' : ''}`,
+    })),
+  ];
+}
+
+function normalizeEfficiencyMode(mode, ranking = []) {
+  const options = efficiencyModeOptions(ranking);
+  return options.some(option => option.value === mode) ? mode : 'all';
+}
+
+function filterEfficiencyRanking(ranking = [], mode = efficiencyMode) {
+  const activeMode = normalizeEfficiencyMode(mode, ranking);
+  if (activeMode === 'all') return ranking;
+
+  if (activeMode === 'max') {
+    const maxPlayed = Math.max(...ranking.map(row => Number(row.played || 0)));
+    return ranking.filter(row => Number(row.played || 0) === maxPlayed);
+  }
+
+  const match = activeMode.match(/^played:(\d+)$/);
+  if (match) {
+    const wanted = Number(match[1]);
+    return ranking.filter(row => Number(row.played || 0) === wanted);
+  }
+
+  return ranking;
+}
+
+function renderEfficiencyModeOptions(ranking = []) {
+  if (!els.efficiencyMode) return;
+
+  const options = efficiencyModeOptions(ranking);
+  const activeMode = normalizeEfficiencyMode(efficiencyMode, ranking);
+  if (activeMode !== efficiencyMode) efficiencyMode = activeMode;
+
+  els.efficiencyMode.innerHTML = options
+    .map(option => `<option value="${escapeHtml(option.value)}"${option.value === activeMode ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
+    .join('');
 }
 
 function computeTournamentEfficiencyRanking() {
@@ -2541,61 +2758,11 @@ function renderTodayResults() {
 function renderTournamentStats() {
   if (!els.tournamentStats) return;
 
-  const played = state.matches.filter(match => isFinishedMatch(match) || isLiveMatch(match));
-  const teams = new Map();
+  const fullRanking = computeTournamentEfficiencyRanking();
+  renderEfficiencyModeOptions(fullRanking);
 
-  played.forEach(match => {
-    const goals = readMatchScore(match);
-    if (!goals) return;
-    const homeGoals = goals.home;
-    const awayGoals = goals.away;
-
-    [
-      [match.homeTeam, match.awayTeam, homeGoals, awayGoals],
-      [match.awayTeam, match.homeTeam, awayGoals, homeGoals],
-    ].forEach(([team, opponent, goalsFor, goalsAgainst]) => {
-      const full = teamLookup(team);
-      const opponentFull = teamLookup(opponent);
-      const performance = matchEfficiencyRating(full, opponentFull, goalsFor, goalsAgainst);
-      const key = teamDomId(full) || norm(full.name || full.shortName || '');
-      const current = teams.get(key) || {
-        team: full,
-        played: 0,
-        goalsFor: 0,
-        goalsAgainst: 0,
-        points: 0,
-        noteTotal: 0,
-        difficultyTotal: 0,
-        expectedTotal: 0,
-      };
-
-      current.played += 1;
-      current.goalsFor += goalsFor;
-      current.goalsAgainst += goalsAgainst;
-      current.points += goalsFor > goalsAgainst ? 3 : (goalsFor === goalsAgainst ? 1 : 0);
-      current.noteTotal += performance.note;
-      current.difficultyTotal += performance.difficulty;
-      current.expectedTotal += performance.expected;
-      teams.set(key, current);
-    });
-  });
-
-  const ranking = [...teams.values()]
-    .map(row => ({
-      ...row,
-      average: row.played ? row.goalsFor / row.played : 0,
-      difference: row.goalsFor - row.goalsAgainst,
-      averageDifficulty: row.played ? row.difficultyTotal / row.played : 0,
-      averageExpected: row.played ? row.expectedTotal / row.played : 0,
-      efficiencyRating: row.played ? row.noteTotal / row.played : 0,
-    }))
-    .sort((a, b) =>
-      b.efficiencyRating - a.efficiencyRating ||
-      b.averageDifficulty - a.averageDifficulty ||
-      b.goalsFor - a.goalsFor ||
-      b.difference - a.difference
-    )
-    .slice(0, dashboardStatsLimits().efficiency);
+  const filteredRanking = filterEfficiencyRanking(fullRanking);
+  const ranking = filteredRanking.slice(0, dashboardStatsLimits().efficiency);
 
   if (!ranking.length) {
     els.tournamentStats.innerHTML = '<div class="efficiency-empty">Les équipes les plus efficaces apparaîtront après les premiers matchs terminés.</div>';
@@ -2620,7 +2787,7 @@ function renderTournamentStats() {
         <span>Matchs <strong>${row.played}</strong></span>
         <span>Adversité <strong>${Math.round(row.averageDifficulty)}</strong></span>
       </div>
-    </article>`).join('') + statsMoreButton(computeTournamentEfficiencyRanking().length - ranking.length);
+    </article>`).join('') + statsMoreButton(filteredRanking.length - ranking.length);
 }
 function renderTopScorers() {
   if (!els.topScorers) return;
@@ -2758,8 +2925,7 @@ function standingRowBySeed(group, position) {
 
 function finalStageGroupComplete(group) {
   const standing = state.standings.find(item => groupLetter(item.group || item.stage || '') === group);
-  const rows = standing?.table || [];
-  return rows.length > 0 && rows.every(row => Number(row.playedGames || 0) >= 3);
+  return standing ? groupIsComplete(standing) : false;
 }
 
 function standingLine(row, group) {
@@ -2878,10 +3044,12 @@ function finalStageTeamHtml(entry, score) {
   const scoreText = score === null || score === undefined ? '-' : String(score);
   const help = entry.help ? ` data-final-tooltip="${escapeHtml(entry.help)}" aria-label="${escapeHtml(entry.help)}"` : '';
   const teamId = entry.team ? teamDomId(entry.team) : '';
+  const flag = entry.team ? `<span class="final-stage-team-flag" aria-hidden="true">${teamVisual(entry.team)}</span>` : '';
   const name = escapeHtml(entry.label || 'À confirmer');
+  const label = `<span class="final-stage-team-label${entry.team ? ' has-flag' : ''}">${flag}<span class="final-stage-team-text">${name}</span></span>`;
   const nameHtml = teamId
-    ? `<button class="final-stage-team-name${entry.help ? ' has-help' : ''}" type="button" data-team-id="${escapeHtml(teamId)}"${help}>${name}</button>`
-    : `<span class="final-stage-team-name${entry.help ? ' has-help' : ''}" tabindex="${entry.help ? '0' : '-1'}"${help}>${name}</span>`;
+    ? `<button class="final-stage-team-name${entry.help ? ' has-help' : ''}" type="button" data-team-id="${escapeHtml(teamId)}"${help}>${label}</button>`
+    : `<span class="final-stage-team-name${entry.help ? ' has-help' : ''}" tabindex="${entry.help ? '0' : '-1'}"${help}>${label}</span>`;
 
   return `<div class="final-stage-team">${nameHtml}<strong>${escapeHtml(scoreText)}</strong></div>`;
 }
@@ -2952,12 +3120,25 @@ function fitFinalStageBracket() {
  */
 function renderMatches() {
   const q    = norm(els.matchSearch.value);
+  const archivedTotal = state.matches.filter(isFinishedMatch).length;
   const list = state.matches
+    .filter(mainScheduleMatch)
     .filter(m => ['matches', 'all'].includes(activeView) || matchHasWatchedTeam(m))
     .filter(m => !q || norm(`${m.homeTeam?.name} ${m.awayTeam?.name} ${m.group} ${m.stage}`).includes(q))
     .sort((a, b) => new Date(a.utcDate || 0) - new Date(b.utcDate || 0));
 
   if (!list.length) {
+    els.matches.innerHTML = `<div class="matches-digest">
+      <span class="matches-kicker">Agenda compact</span>
+      <strong>0 affiché</strong>
+      <span>Aucun match à venir${q ? ' dans cette recherche' : ''}</span>
+      <button class="archive-button" type="button" data-open-matches-archive ${archivedTotal ? '' : 'disabled'}>
+        Archives
+        <span>${archivedTotal}</span>
+      </button>
+    </div>
+    <div class="empty">Aucun match à venir trouvé.</div>`;
+    return;
     els.matches.innerHTML = '<div class="empty">Aucun match trouvé pour cette recherche.</div>';
     return;
   }
@@ -2965,6 +3146,7 @@ function renderMatches() {
   // Tranche visible
   const visible = list.slice(0, matchesVisible);
   const remaining = list.length - visible.length;
+  const liveTotal = list.filter(isLiveMatch).length;
   const upcomingTotal = list.filter(isUpcomingMatch).length;
   const nextMatch = getNextMatch();
 
@@ -3012,9 +3194,23 @@ function renderMatches() {
     <span class="matches-kicker">Agenda compact</span>
     <strong>${visible.length} affiché${visible.length > 1 ? 's' : ''}</strong>
     <span>${upcomingTotal} match${upcomingTotal > 1 ? 's' : ''} à venir${q ? ' dans cette recherche' : ''}</span>
+    <button class="archive-button" type="button" data-open-matches-archive ${archivedTotal ? '' : 'disabled'}>
+      Archives
+      <span>${archivedTotal}</span>
+    </button>
   </div>`;
 
-  els.matches.innerHTML = digestHtml + `<div class="matches-window">${cardsHtml}</div>` + footerHtml;
+  const scheduleDigestHtml = `<div class="matches-digest">
+    <span class="matches-kicker">Agenda compact</span>
+    <strong>${visible.length} affiché${visible.length > 1 ? 's' : ''}</strong>
+    <span>${liveTotal ? `${liveTotal} live · ` : ''}${upcomingTotal} match${upcomingTotal > 1 ? 's' : ''} à venir${q ? ' dans cette recherche' : ''}</span>
+    <button class="archive-button" type="button" data-open-matches-archive ${archivedTotal ? '' : 'disabled'}>
+      Archives
+      <span>${archivedTotal}</span>
+    </button>
+  </div>`;
+
+  els.matches.innerHTML = scheduleDigestHtml + `<div class="matches-window">${cardsHtml}</div>` + footerHtml;
 
   // Le bouton est injecté dans le DOM juste ci-dessus : on peut maintenant l'écouter
   const btn = document.getElementById('matchesShowMore');
@@ -3251,11 +3447,20 @@ async function loadData(options = {}) {
   }
 
   try {
-    const params = new URLSearchParams({ t: String(Date.now()) });
-    if (manual || options.refresh || options.live) params.set('refresh', '1');
+    const params = new URLSearchParams();
+    if (manual || options.refresh || options.live) {
+      params.set('refresh', '1');
+      params.set('t', String(Date.now()));
+    }
+    if (options.revalidate) {
+      params.set('revalidate', '1');
+      params.set('t', String(Date.now()));
+    }
     if (options.live) params.set('live', '1');
 
-    const res  = await fetch(`${API_URL}?${params.toString()}`, { cache: 'no-store' });
+    const requestUrl = params.toString() ? `${API_URL}?${params.toString()}` : API_URL;
+    const fetchOptions = (manual || options.refresh || options.live || options.revalidate) ? { cache: 'no-store' } : { cache: 'default' };
+    const res  = await fetch(requestUrl, fetchOptions);
     const data = await res.json();
 
     if (!res.ok || !data.ok) throw new Error(data.message || 'Mise à jour indisponible');
@@ -3283,18 +3488,33 @@ async function loadData(options = {}) {
 
     renderAll();
 
-    if (!manual && !options.refresh) {
-      window.setTimeout(() => loadData({ silent: true, refresh: true }), 250);
+    const servedStaleCache = Boolean(data.stale || data.cache?.stale);
+    if (servedStaleCache && !manual && !options.refresh && !options.live) {
+      window.setTimeout(() => loadData({ silent: true, revalidate: true }), 1500);
+    }
+    if (getLiveMatch() && !manual && !options.live && !liveRefreshInFlight) {
+      liveRefreshInFlight = true;
+      window.setTimeout(async () => {
+        try {
+          await loadData({ silent: true, refresh: true, live: true });
+        } finally {
+          liveRefreshInFlight = false;
+        }
+      }, 120);
     }
 
     // Horodatage de la dernière mise à jour
     const now = new Intl.DateTimeFormat('fr-FR', { timeStyle: 'medium' }).format(new Date());
     els.status.textContent = `Mis à jour à ${now}`;
     hasLoadedData = true;
+    setInitialLoading(true);
 
   } catch (err) {
     // En cas d'erreur réseau, on conserve les données précédentes
     if (!silent) els.status.textContent = `⚠ ${err.message}`;
+    if (!hasLoadedData) {
+      setInitialLoading(false, `Les sources mettent plus de temps que prévu. ${err.message}`);
+    }
   } finally {
     // On retire toujours le spinner, même en cas d'erreur
     if (!silent) els.refreshBtn.classList.remove('spinning');
@@ -3309,6 +3529,14 @@ async function loadData(options = {}) {
 els.refreshBtn.addEventListener('click', () => loadData({ manual: true }));
 
 document.addEventListener('click', event => {
+  const initialRefresh = event.target.closest('[data-initial-refresh]');
+  if (initialRefresh) {
+    event.preventDefault();
+    setInitialLoading(false, '');
+    loadData({ manual: true });
+    return;
+  }
+
   const matchdayToggle = event.target.closest('[data-matchday-toggle]');
   if (!matchdayToggle) return;
 
@@ -3367,6 +3595,18 @@ els.matchSearch.addEventListener('input', () => {
 
 // Champ de recherche équipes : idem
 els.teamSearch.addEventListener('input', renderTeams);
+
+if (els.efficiencyMode) {
+  els.efficiencyMode.addEventListener('change', () => {
+    efficiencyMode = els.efficiencyMode.value || 'all';
+    try {
+      localStorage.setItem(EFFICIENCY_MODE_STORAGE_KEY, efficiencyMode);
+    } catch (_) {
+      // Le mode reste actif pour la session courante.
+    }
+    renderTournamentStats();
+  });
+}
 
 els.matchSearch.addEventListener('focus', () => {
   if (activeView !== 'matches') setView('matches', '#matchs');
@@ -3428,6 +3668,13 @@ document.addEventListener('click', event => {
   if (matchButton) {
     event.preventDefault();
     openMatchModal(matchButton.dataset.openMatch);
+    return;
+  }
+
+  const archiveButton = event.target.closest('[data-open-matches-archive]');
+  if (archiveButton) {
+    event.preventDefault();
+    openMatchesArchiveModal();
     return;
   }
 

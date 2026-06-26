@@ -163,6 +163,20 @@ require __DIR__ . '/partials/head.php';
        ═══════════════════════════════════════════════════════════════════════ -->
   <main class="container">
 
+    <section id="initialLoading" class="initial-loading" aria-live="polite">
+      <div class="initial-loading-copy">
+        <span>Connexion aux sources</span>
+        <strong>Preparation du tableau de bord...</strong>
+        <p>Les matchs, groupes, scores et actus arrivent. La page reste disponible pendant la recuperation.</p>
+      </div>
+      <div class="initial-loading-steps" aria-hidden="true">
+        <i></i>
+        <i></i>
+        <i></i>
+      </div>
+      <button class="initial-loading-retry" type="button" data-initial-refresh hidden>Relancer</button>
+    </section>
+
     <!-- ── Compteurs statistiques en haut de page ────────────────────────── -->
     <section class="stats" aria-label="Statistiques du tournoi">
       <a class="stat-card" href="#equipes" data-view="teams">
@@ -224,6 +238,10 @@ require __DIR__ . '/partials/head.php';
               <h2>Équipes efficaces</h2>
               <button class="help-pill" type="button" data-efficiency-help aria-label="Comment est calculée la note des équipes efficaces">?</button>
             </div>
+            <label class="efficiency-mode">
+              <span class="sr-only">Comparer les équipes efficaces</span>
+              <select id="efficiencyMode" aria-label="Comparer les équipes efficaces"></select>
+            </label>
           </div>
         </div>
         <div id="tournamentStats" class="tournament-stats"></div>
@@ -245,9 +263,9 @@ require __DIR__ . '/partials/head.php';
       <div class="section-title">
         <div>
           <p class="eyebrow">Nos équipes</p>
-          <h2>Prochain rendez-vous</h2>
+          <h2 id="watchedNextTitle">Prochain rendez-vous</h2>
         </div>
-        <p class="hint watched-next-countries">France · Congo · Portugal</p>
+        <p id="watchedNextContext" class="hint watched-next-countries">France · Congo · Portugal</p>
       </div>
       <div id="watchedNextMatch" class="watched-next"></div>
     </section>
